@@ -264,7 +264,7 @@ resource "aws_bedrockagent_knowledge_base" "scf" {
 
     s3_vectors_configuration {
       vector_bucket_arn = "arn:aws:s3vectors:${local.region}:${local.account_id}:bucket/${local.name_prefix}-scf-vectors"
-      index_arn         = "arn:aws:s3vectors:${local.region}:${local.account_id}:bucket/${local.name_prefix}-scf-vectors/index/scf-controls-index"
+      index_name        = "scf-controls-index"
     }
   }
 

@@ -594,12 +594,6 @@ resource "aws_bedrockagentcore_gateway_target" "compliance_agent" {
   name               = "scf-compliance-agent"
   description        = "Routes requests to the SCF Compliance Assessment Agent runtime"
 
-  credential_provider_configuration {
-    gateway_iam_role {
-      service = "bedrock-agentcore"
-    }
-  }
-
   target_configuration {
     http {
       agentcore_runtime {

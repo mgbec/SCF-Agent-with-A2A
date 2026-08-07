@@ -108,11 +108,6 @@ resource "aws_iam_role" "knowledge_base" {
         Principal = {
           Service = "bedrock.amazonaws.com"
         }
-        Condition = {
-          StringEquals = {
-            "aws:SourceAccount" = local.account_id
-          }
-        }
       }
     ]
   })
@@ -469,7 +464,13 @@ resource "terraform_data" "web_search_target" {
 
   provisioner "local-exec" {
     interpreter = ["PowerShell", "-Command"]
-    command     = "aws bedrock-agentcore-control create-gateway-target --gateway-identifier '${aws_bedrockagentcore_gateway.compliance.gateway_id}' --name 'web-search' --target-configuration '{\"connector\":{\"source\":{\"connectorId\":\"web-search\"}}}' --region '${local.region}'"
+    command     = <<-EOT
+      $config = '{"connector":{"source":{"connectorId":"web-search"}}}'
+      $configFile = [System.IO.Path]::GetTempFileName()
+      $config | Set-Content -Path $configFile -Encoding UTF8
+      aws bedrock-agentcore-control create-gateway-target --gateway-identifier "${aws_bedrockagentcore_gateway.compliance.gateway_id}" --name "web-search" --target-configuration "file://$configFile" --region "${local.region}"
+      Remove-Item $configFile -ErrorAction SilentlyContinue
+    EOT
   }
 }
 

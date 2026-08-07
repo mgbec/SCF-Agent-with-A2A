@@ -112,7 +112,7 @@ Always be precise, cite sources, and provide context-appropriate guidance."""
 
 
 class AgentHandler(BaseHTTPRequestHandler):
-    """Simple HTTP handler for AgentCore Runtime."""
+    """HTTP handler for AgentCore Runtime contract."""
 
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
@@ -123,9 +123,18 @@ class AgentHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             event = {"prompt": body.decode("utf-8", errors="replace")}
 
-        result = handler(event)
+        # AgentCore sends the prompt in different possible fields
+        prompt = (
+            event.get("prompt")
+            or event.get("input")
+            or event.get("message")
+            or event.get("query")
+            or str(event)
+        )
 
-        response_body = json.dumps(result.get("body", {})).encode("utf-8")
+        result = handler({"prompt": prompt, "session_id": event.get("session_id", "default")})
+
+        response_body = json.dumps(result.get("body", result)).encode("utf-8")
         self.send_response(result.get("statusCode", 200))
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(response_body)))
@@ -136,8 +145,10 @@ class AgentHandler(BaseHTTPRequestHandler):
         """Health check endpoint."""
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        body = b'{"status":"healthy"}'
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(b'{"status":"healthy"}')
+        self.wfile.write(body)
 
     def log_message(self, format, *args):
         logger.debug(f"{self.address_string()} - {format % args}")
@@ -170,6 +181,31 @@ def handler(event: dict) -> dict:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
-    server = HTTPServer(("0.0.0.0", port), AgentHandler)
-    logger.info(f"SCF Compliance Agent listening on port {port}")
-    server.serve_forever()
+    logger.info(f"SCF Compliance Agent starting on port {port}")
+
+    # Try to use the AgentCore SDK server if available
+    try:
+        from bedrock_agentcore.runtime import Runtime
+
+        runtime = Runtime()
+
+        @runtime.handler
+        def handle_request(event):
+            prompt = (
+                event.get("prompt")
+                or event.get("input")
+                or event.get("message")
+                or event.get("query")
+                or str(event)
+            )
+            agent = _get_agent()
+            result = agent(prompt)
+            return {"response": str(result)}
+
+        runtime.serve()
+    except ImportError:
+        # Fallback to stdlib HTTP server
+        logger.info("AgentCore SDK not available, using stdlib HTTP server")
+        server = HTTPServer(("0.0.0.0", port), AgentHandler)
+        logger.info(f"Listening on port {port}")
+        server.serve_forever()

@@ -1,2 +1,4 @@
 strands-agents>=0.3.0
+strands-agents-builder>=0.1.0
+bedrock-agentcore-runtime>=0.1.0
 boto3>=1.38.0

@@ -125,11 +125,6 @@ resource "aws_iam_role" "knowledge_base" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "knowledge_base_bedrock_full" {
-  role       = aws_iam_role.knowledge_base.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
-}
-
 resource "aws_iam_role_policy" "knowledge_base_s3" {
   name = "s3-access"
   role = aws_iam_role.knowledge_base.id
@@ -141,14 +136,38 @@ resource "aws_iam_role_policy" "knowledge_base_s3" {
         Effect = "Allow"
         Action = [
           "s3:GetObject",
-          "s3:ListBucket",
-          "s3:PutObject",
-          "s3:DeleteObject"
+          "s3:ListBucket"
         ]
         Resource = [
           aws_s3_bucket.scf_data.arn,
           "${aws_s3_bucket.scf_data.arn}/*"
         ]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "knowledge_base_bedrock" {
+  name = "bedrock-model-access"
+  role = aws_iam_role.knowledge_base.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:ListFoundationModels",
+          "bedrock:ListCustomModels"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel"
+        ]
+        Resource = "arn:aws:bedrock:${local.region}::foundation-model/${var.embedding_model_id}"
       }
     ]
   })
@@ -162,14 +181,70 @@ resource "aws_iam_role_policy" "knowledge_base_s3vectors" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "S3VectorsAccess"
         Effect = "Allow"
         Action = [
-          "s3vectors:*"
+          "s3vectors:CreateIndex",
+          "s3vectors:DeleteIndex",
+          "s3vectors:GetIndex",
+          "s3vectors:ListIndexes",
+          "s3vectors:PutVectors",
+          "s3vectors:GetVectors",
+          "s3vectors:DeleteVectors",
+          "s3vectors:QueryVectors",
+          "s3vectors:ListVectorBuckets",
+          "s3vectors:GetVectorBucket"
         ]
-        Resource = "*"
+        Resource = [
+          "arn:aws:s3vectors:${local.region}:${local.account_id}:bucket/${local.name_prefix}-scf-vectors",
+          "arn:aws:s3vectors:${local.region}:${local.account_id}:bucket/${local.name_prefix}-scf-vectors/*"
+        ]
       }
     ]
   })
+}
+
+# --------------------------------------------------------------------------
+# S3 Vectors Bucket & Index (vector store for Knowledge Base)
+# Note: aws_s3vectors_* resources don't exist in provider 6.56 yet, so we
+# use local-exec provisioners with lifecycle destroy handlers.
+# --------------------------------------------------------------------------
+
+resource "terraform_data" "s3_vectors_bucket" {
+  input = "${local.name_prefix}-scf-vectors"
+
+  provisioner "local-exec" {
+    interpreter = ["PowerShell", "-Command"]
+    command     = "aws s3vectors create-vector-bucket --vector-bucket-name '${local.name_prefix}-scf-vectors' --region '${local.region}' 2>&1 | Out-Null; Write-Host 'S3 Vectors bucket created'"
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["PowerShell", "-Command"]
+    command     = "aws s3vectors delete-index --vector-bucket-name '${self.output}' --index-name 'scf-controls-index' --region us-east-1 2>&1 | Out-Null; aws s3vectors delete-vector-bucket --vector-bucket-name '${self.output}' --region us-east-1 2>&1 | Out-Null; Write-Host 'S3 Vectors bucket deleted'"
+  }
+}
+
+resource "terraform_data" "s3_vectors_index" {
+  depends_on = [terraform_data.s3_vectors_bucket]
+  input      = "${local.name_prefix}-scf-vectors"
+
+  provisioner "local-exec" {
+    interpreter = ["PowerShell", "-Command"]
+    command     = "aws s3vectors create-index --vector-bucket-name '${local.name_prefix}-scf-vectors' --index-name 'scf-controls-index' --data-type float32 --dimension 1024 --distance-metric cosine --region '${local.region}' 2>&1 | Out-Null; Write-Host 'S3 Vectors index created'"
+  }
+}
+
+# IAM role propagation delay
+resource "time_sleep" "wait_for_kb_role" {
+  depends_on = [
+    aws_iam_role.knowledge_base,
+    aws_iam_role_policy.knowledge_base_s3,
+    aws_iam_role_policy.knowledge_base_bedrock,
+    aws_iam_role_policy.knowledge_base_s3vectors,
+    terraform_data.s3_vectors_index,
+  ]
+  create_duration = "15s"
 }
 
 resource "aws_bedrockagent_knowledge_base" "scf" {
@@ -187,22 +262,13 @@ resource "aws_bedrockagent_knowledge_base" "scf" {
   storage_configuration {
     type = "S3_VECTORS"
 
-    s3_vectors_configuration {}
+    s3_vectors_configuration {
+      vector_bucket_arn = "arn:aws:s3vectors:${local.region}:${local.account_id}:bucket/${local.name_prefix}-scf-vectors"
+      index_arn         = "arn:aws:s3vectors:${local.region}:${local.account_id}:bucket/${local.name_prefix}-scf-vectors/index/scf-controls-index"
+    }
   }
 
-  depends_on = [
-    aws_iam_role_policy_attachment.knowledge_base_bedrock_full,
-    aws_iam_role_policy.knowledge_base_s3,
-    aws_iam_role_policy.knowledge_base_s3vectors,
-    time_sleep.wait_for_kb_role,
-  ]
-}
-
-# IAM role propagation delay - Bedrock needs the role to be fully propagated
-# IAM is eventually consistent; 60s accounts for worst-case propagation
-resource "time_sleep" "wait_for_kb_role" {
-  depends_on      = [aws_iam_role.knowledge_base, aws_iam_role_policy_attachment.knowledge_base_bedrock_full, aws_iam_role_policy.knowledge_base_s3, aws_iam_role_policy.knowledge_base_s3vectors]
-  create_duration = "60s"
+  depends_on = [time_sleep.wait_for_kb_role]
 }
 
 resource "aws_bedrockagent_data_source" "scf_json" {

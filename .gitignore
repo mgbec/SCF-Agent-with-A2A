@@ -18,6 +18,7 @@ build/
 
 # Lambda packaging
 lambda/**/package.zip
+agent-deployment.zip
 
 # IDE
 .idea/

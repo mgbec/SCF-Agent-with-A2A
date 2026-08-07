@@ -83,17 +83,20 @@ resource "aws_s3_bucket_public_access_block" "scf_data" {
 }
 
 # --------------------------------------------------------------------------
-# ECR Repository - Agent Container
+# Agent Code Package (S3 zip deployment - no Docker required)
 # --------------------------------------------------------------------------
 
-resource "aws_ecr_repository" "agent" {
-  name                 = "${local.name_prefix}-compliance-agent"
-  image_tag_mutability = "MUTABLE"
-  force_delete         = true
+data "archive_file" "agent_code" {
+  type        = "zip"
+  source_dir  = "${path.module}/../agent"
+  output_path = "${path.module}/../agent-deployment.zip"
+}
 
-  image_scanning_configuration {
-    scan_on_push = true
-  }
+resource "aws_s3_object" "agent_code" {
+  bucket = aws_s3_bucket.scf_data.id
+  key    = "agent-code/deployment_package.zip"
+  source = data.archive_file.agent_code.output_path
+  etag   = data.archive_file.agent_code.output_md5
 }
 
 # --------------------------------------------------------------------------
@@ -316,25 +319,23 @@ resource "aws_iam_role" "agentcore_runtime" {
   })
 }
 
-resource "aws_iam_role_policy" "agentcore_ecr" {
-  name = "ecr-access"
+resource "aws_iam_role_policy" "agentcore_s3_code" {
+  name = "s3-code-access"
   role = aws_iam_role.agentcore_runtime.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["ecr:GetAuthorizationToken"]
-        Resource = ["*"]
-      },
-      {
         Effect = "Allow"
         Action = [
-          "ecr:BatchGetImage",
-          "ecr:GetDownloadUrlForLayer"
+          "s3:GetObject",
+          "s3:GetBucketLocation"
         ]
-        Resource = [aws_ecr_repository.agent.arn]
+        Resource = [
+          aws_s3_bucket.scf_data.arn,
+          "${aws_s3_bucket.scf_data.arn}/agent-code/*"
+        ]
       }
     ]
   })
@@ -457,19 +458,26 @@ resource "aws_bedrockagentcore_agent_runtime" "compliance_agent" {
   role_arn           = aws_iam_role.agentcore_runtime.arn
 
   agent_runtime_artifact {
-    container_configuration {
-      container_uri = "${aws_ecr_repository.agent.repository_url}:latest"
+    code_configuration {
+      entry_point = ["main.py"]
+      runtime     = "PYTHON_3_13"
+      code {
+        s3 {
+          bucket = aws_s3_bucket.scf_data.id
+          prefix = "agent-code/deployment_package.zip"
+        }
+      }
     }
   }
 
   environment_variables = {
-    SCF_DATA_BUCKET       = aws_s3_bucket.scf_data.id
-    KNOWLEDGE_BASE_ID     = aws_bedrockagent_knowledge_base.scf.id
-    MEMORY_ID             = aws_bedrockagentcore_memory.compliance.id
-    GATEWAY_ID            = aws_bedrockagentcore_gateway.compliance.gateway_id
-    BEDROCK_MODEL_ID      = var.bedrock_model_id
-    AWS_REGION            = local.region
-    LOG_LEVEL             = var.log_level
+    SCF_DATA_BUCKET   = aws_s3_bucket.scf_data.id
+    KNOWLEDGE_BASE_ID = aws_bedrockagent_knowledge_base.scf.id
+    MEMORY_ID         = aws_bedrockagentcore_memory.compliance.id
+    GATEWAY_ID        = aws_bedrockagentcore_gateway.compliance.gateway_id
+    BEDROCK_MODEL_ID  = var.bedrock_model_id
+    AWS_REGION        = local.region
+    LOG_LEVEL         = var.log_level
   }
 
   network_configuration {
@@ -479,6 +487,8 @@ resource "aws_bedrockagentcore_agent_runtime" "compliance_agent" {
   protocol_configuration {
     server_protocol = "HTTP"
   }
+
+  depends_on = [aws_s3_object.agent_code]
 
   tags = {
     Component = "runtime"

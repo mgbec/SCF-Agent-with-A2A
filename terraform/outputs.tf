@@ -42,9 +42,9 @@ output "scf_data_bucket" {
   value       = aws_s3_bucket.scf_data.id
 }
 
-output "ecr_repository_url" {
-  description = "ECR repository URL for the agent container image"
-  value       = aws_ecr_repository.agent.repository_url
+output "agent_code_s3_key" {
+  description = "S3 key for the agent code deployment package"
+  value       = aws_s3_object.agent_code.key
 }
 
 output "memory_id" {

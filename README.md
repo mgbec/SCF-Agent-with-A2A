@@ -71,9 +71,8 @@ No manual intervention required — your team gets an email when the data update
 
 - Terraform >= 1.6
 - AWS CLI v2 configured with credentials
-- Docker (for building the agent container)
 - Python 3.13+ (for agent code development)
-- Access to Amazon Bedrock (Claude model enabled in your region)
+- Access to Amazon Bedrock (Claude model + Titan Embed v2 enabled in your region)
 - AgentCore access enabled in your account
 
 ## Quick Start
@@ -92,14 +91,13 @@ terraform apply
 cd ..\scripts
 python upload_scf_data.py
 
-# 3. Build and push the agent container
-cd ..\agent
-.\build-and-push.ps1
-
-# 4. Test the agent
-cd ..\scripts
+# 3. Test the agent
 python test_agent.py
 ```
+
+Terraform automatically packages the `agent/` directory as a zip, uploads it to S3,
+and configures AgentCore Runtime to use it with Python 3.13. No Docker or container
+builds required.
 
 ## Project Structure
 
@@ -122,9 +120,7 @@ scf-compliance-agent/
 │   │   ├── maturity_assessor.py # SCR-CMM Level 0-5 assessment
 │   │   ├── gap_analyzer.py    # Gap analysis + remediation guidance
 │   │   └── web_research.py    # Live web search (regulatory, CVE, breaches)
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── build-and-push.ps1
+│   └── requirements.txt
 ├── lambda/
 │   └── scf_updater/
 │       └── handler.py          # Weekly SCF version check + update
@@ -145,14 +141,14 @@ scf-compliance-agent/
 
 | Resource | Type | Purpose |
 |----------|------|---------|
-| S3 Bucket | `aws_s3_bucket` | Stores SCF JSON source data |
+| S3 Bucket | `aws_s3_bucket` | Stores SCF JSON source data + agent code zip |
+| S3 Vectors Bucket + Index | CLI provisioner | Vector store for KB embeddings (1024-dim, cosine) |
 | Bedrock Knowledge Base | `aws_bedrockagent_knowledge_base` | Vector-indexed SCF controls (S3 Vectors backend) |
-| AgentCore Runtime | `aws_bedrockagentcore_agent_runtime` | Hosts the compliance agent container |
+| AgentCore Runtime | `aws_bedrockagentcore_agent_runtime` | Hosts the agent (S3 code deploy, Python 3.13) |
 | AgentCore Memory | `aws_bedrockagentcore_memory` | Persists assessment sessions (90-day TTL) |
 | MCP Gateway | `aws_bedrockagentcore_gateway` | Exposes Web Search connector via MCP |
 | HTTP Gateway | `aws_bedrockagentcore_gateway` | Routes traffic to the agent runtime |
 | Web Search Target | CLI provisioner | Bedrock managed web search connector |
-| ECR Repository | `aws_ecr_repository` | Agent container images |
 | Lambda Function | `aws_lambda_function` | Weekly SCF version checker/updater |
 | EventBridge Rule | `aws_cloudwatch_event_rule` | Cron trigger (Mondays 8:00 UTC) |
 | SNS Topic | `aws_sns_topic` | Update notifications to your team |
@@ -210,6 +206,15 @@ Approximate monthly costs when idle (no active assessments):
 | Bedrock FM (Claude) | Per-token | Charged per assessment |
 
 Active usage costs depend on assessment volume and conversation length.
+
+## Known Issues
+
+- **Provider bug (aws 6.56):** The `aws_bedrockagentcore_gateway_target` resource for HTTP
+  targets may show "Provider produced inconsistent result" on first apply. Run
+  `terraform apply -refresh-only` to sync state, then subsequent applies work cleanly.
+- **Web Search connector:** Provisioned via CLI (`terraform_data`) since the Terraform
+  provider doesn't have native connector target support yet. Manual cleanup needed
+  on destroy (see below).
 
 ## Cleanup
 

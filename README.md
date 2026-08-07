@@ -227,3 +227,79 @@ aws bedrock-agentcore-control delete-gateway-target `
   --target-id <target-id> `
   --region us-east-1
 ```
+
+## About the Secure Controls Framework (SCF)
+
+The [Secure Controls Framework (SCF)](https://securecontrolsframework.com) is a comprehensive
+meta-framework maintained by the SCF Council that provides a catalog of security, privacy, and
+compliance controls mapped to 252+ laws, regulations, and frameworks worldwide.
+
+### Key SCF Resources
+
+| Resource | URL |
+|----------|-----|
+| SCF Website | https://securecontrolsframework.com |
+| SCF Download (XLSX, JSON) | https://securecontrolsframework.com/free-content/scf-download |
+| SCF Overview & Practitioner Guidebook | https://content.securecontrolsframework.com/pdf/scf-recommended-practices.pdf |
+| SCF Domain & Principles | Included in the SCF download package |
+| SCRMS (GRC Playbook) | Included in the SCF download package |
+| SCF Conformity Assessment Program (CAP) | https://securecontrolsframework.com/scf-cap |
+| SCF Training (Practitioner, Architect, Assessor) | https://securecontrolsframework.com/training |
+| SCFConnect (SaaS GRC Platform) | https://scfconnect.com |
+
+### SCF 2026.2 at a Glance
+
+- **1,534 controls** across **34 domains**
+- **252+ mapped frameworks** including NIST 800-53, ISO 27001, HIPAA, PCI DSS, EU NIS2, DORA, AI Act
+- **SCR-CMM maturity model** (Levels 0-5) with per-control criteria
+- **Risk & Threat correlation** linking controls to specific risk/threat scenarios
+- **Size-appropriate guidance** (Micro-Small through Enterprise)
+- **Profile-based scoping** (ESP Level 1/2/3, AI Model Deployment, MA&D, SCRMS)
+- **New in 2026.2:** Quantum Security (QTS) domain with 34 post-quantum cryptography controls
+
+### SCF Domains (34)
+
+| # | ID | Domain |
+|---|-----|--------|
+| 1 | GOV | Security, Compliance & Resilience Governance |
+| 2 | AAT | Artificial Intelligence & Autonomous Technologies |
+| 3 | AST | Asset Management |
+| 4 | BCD | Business Continuity & Disaster Recovery |
+| 5 | CAP | Capacity & Performance Planning |
+| 6 | CHG | Change Management |
+| 7 | CLD | Cloud Security |
+| 8 | CPL | Compliance |
+| 9 | CFG | Configuration Management |
+| 10 | MON | Continuous Monitoring |
+| 11 | CRY | Cryptographic Protections |
+| 12 | DCH | Data Classification & Handling |
+| 13 | EMB | Embedded Technology |
+| 14 | END | Endpoint Security |
+| 15 | HRS | Human Resources Security |
+| 16 | IAC | Identity & Access Control |
+| 17 | IRO | Incident Response |
+| 18 | IAO | Information Assurance |
+| 19 | MNT | Maintenance |
+| 20 | MDM | Mobile Device Management |
+| 21 | NET | Network Security |
+| 22 | PES | Physical & Environmental Security |
+| 23 | PRI | Privacy |
+| 24 | PRM | Project & Resource Management |
+| 25 | QTS | Quantum Security |
+| 26 | RSK | Risk Management |
+| 27 | SEA | Secure Engineering & Architecture |
+| 28 | OPS | Security Operations |
+| 29 | SAT | Security Awareness & Training |
+| 30 | TDA | Technology Development & Acquisition |
+| 31 | TPM | Third-Party Management |
+| 32 | THR | Threat Management |
+| 33 | VPM | Vulnerability & Patch Management |
+| 34 | WEB | Web Security |
+
+### License & Attribution
+
+The Secure Controls Framework is free to download and use. SCF content is provided by the
+[SCF Council](https://securecontrolsframework.com). This project uses SCF data under the
+terms published at the SCF download page. This agent is not affiliated with or endorsed by
+the SCF Council — it is an independent implementation that consumes SCF data for compliance
+assessment purposes.

@@ -15,6 +15,10 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.0"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
+    }
   }
 }
 
@@ -175,7 +179,14 @@ resource "aws_bedrockagent_knowledge_base" "scf" {
   depends_on = [
     aws_iam_role_policy.knowledge_base_s3,
     aws_iam_role_policy.knowledge_base_bedrock,
+    time_sleep.wait_for_kb_role,
   ]
+}
+
+# IAM role propagation delay - Bedrock needs the role to be fully propagated
+resource "time_sleep" "wait_for_kb_role" {
+  depends_on      = [aws_iam_role.knowledge_base, aws_iam_role_policy.knowledge_base_s3, aws_iam_role_policy.knowledge_base_bedrock]
+  create_duration = "20s"
 }
 
 resource "aws_bedrockagent_data_source" "scf_json" {

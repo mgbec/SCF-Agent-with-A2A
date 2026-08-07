@@ -2,39 +2,73 @@
 SCF Compliance Assessment Agent - Bedrock AgentCore Runtime Entry Point
 
 This agent provides agentic compliance assessment capabilities using the
-Secure Controls Framework (SCF) 2026.2 as its knowledge base. It can:
-- Look up SCF controls by ID, domain, or keyword
-- Map controls between SCF and 252+ external frameworks
-- Assess organizational maturity using SCR-CMM Levels 0-5
-- Perform gap analysis against target compliance frameworks
-- Correlate controls with risk scenarios and threats
+Secure Controls Framework (SCF) 2026.2 as its knowledge base.
 """
 
 import json
 import logging
 import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from strands import Agent
-from strands.models.bedrock import BedrockModel
-from strands_agents_tools.http_server import start_server
-
-from tools.scf_lookup import scf_control_lookup, scf_domain_list, scf_search
-from tools.framework_mapper import map_to_framework, list_frameworks, get_control_mappings
-from tools.maturity_assessor import assess_maturity, get_maturity_criteria
-from tools.gap_analyzer import gap_analysis, compliance_scope
-from tools.web_research import (
-    search_regulatory_updates,
-    search_vulnerability_intelligence,
-    search_breach_cases,
-    search_best_practices,
-)
-
-# Configure logging
+# Configure logging immediately (no heavy imports yet)
 log_level = os.environ.get("LOG_LEVEL", "INFO")
 logging.basicConfig(level=getattr(logging, log_level))
 logger = logging.getLogger(__name__)
 
-# Agent system prompt
+# Lazy-loaded agent instance
+_agent = None
+
+
+def _get_agent():
+    """Lazy-initialize the agent on first request (not at import time)."""
+    global _agent
+    if _agent is not None:
+        return _agent
+
+    logger.info("Initializing SCF Compliance Agent...")
+    from strands import Agent
+    from strands.models.bedrock import BedrockModel
+
+    from tools.scf_lookup import scf_control_lookup, scf_domain_list, scf_search
+    from tools.framework_mapper import map_to_framework, list_frameworks, get_control_mappings
+    from tools.maturity_assessor import assess_maturity, get_maturity_criteria
+    from tools.gap_analyzer import gap_analysis, compliance_scope
+    from tools.web_research import (
+        search_regulatory_updates,
+        search_vulnerability_intelligence,
+        search_breach_cases,
+        search_best_practices,
+    )
+
+    model = BedrockModel(
+        model_id=os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0"),
+        region_name=os.environ.get("AWS_REGION", "us-east-1"),
+    )
+
+    _agent = Agent(
+        model=model,
+        system_prompt=SYSTEM_PROMPT,
+        tools=[
+            scf_control_lookup,
+            scf_domain_list,
+            scf_search,
+            map_to_framework,
+            list_frameworks,
+            get_control_mappings,
+            assess_maturity,
+            get_maturity_criteria,
+            gap_analysis,
+            compliance_scope,
+            search_regulatory_updates,
+            search_vulnerability_intelligence,
+            search_breach_cases,
+            search_best_practices,
+        ],
+    )
+    logger.info("Agent initialized successfully")
+    return _agent
+
+
 SYSTEM_PROMPT = """You are a Secure Controls Framework (SCF) 2026.2 Compliance Assessment Agent.
 You are an expert in cybersecurity governance, risk management, and compliance (GRC).
 
@@ -76,59 +110,48 @@ HRS, IAC, IRO, IAO, MNT, MDM, NET, PES, PRI, PRM, QTS, RSK, SEA, OPS, SAT, TDA, 
 
 Always be precise, cite sources, and provide context-appropriate guidance."""
 
-def create_agent() -> Agent:
-    """Create and configure the SCF compliance agent."""
-    model = BedrockModel(
-        model_id=os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0"),
-        region_name=os.environ.get("AWS_REGION", "us-east-1"),
-    )
 
-    agent = Agent(
-        model=model,
-        system_prompt=SYSTEM_PROMPT,
-        tools=[
-            # Core SCF knowledge base tools
-            scf_control_lookup,
-            scf_domain_list,
-            scf_search,
-            map_to_framework,
-            list_frameworks,
-            get_control_mappings,
-            assess_maturity,
-            get_maturity_criteria,
-            gap_analysis,
-            compliance_scope,
-            # Web research tools (supplementary - live internet)
-            search_regulatory_updates,
-            search_vulnerability_intelligence,
-            search_breach_cases,
-            search_best_practices,
-        ],
-    )
+class AgentHandler(BaseHTTPRequestHandler):
+    """Simple HTTP handler for AgentCore Runtime."""
 
-    return agent
+    def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
 
+        try:
+            event = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            event = {"prompt": body.decode("utf-8", errors="replace")}
 
-# Create global agent instance
-agent = create_agent()
+        result = handler(event)
+
+        response_body = json.dumps(result.get("body", {})).encode("utf-8")
+        self.send_response(result.get("statusCode", 200))
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response_body)))
+        self.end_headers()
+        self.wfile.write(response_body)
+
+    def do_GET(self):
+        """Health check endpoint."""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"status":"healthy"}')
+
+    def log_message(self, format, *args):
+        logger.debug(f"{self.address_string()} - {format % args}")
 
 
 def handler(event: dict) -> dict:
-    """
-    AgentCore Runtime handler - processes incoming requests.
-
-    Args:
-        event: Request payload with 'prompt' and optional 'session_id'
-
-    Returns:
-        Response with agent output
-    """
+    """Process incoming requests."""
     prompt = event.get("prompt", "")
     session_id = event.get("session_id", "default")
 
     logger.info(f"Processing request for session: {session_id}")
 
     try:
+        agent = _get_agent()
         result = agent(prompt)
         return {
             "statusCode": 200,
@@ -146,6 +169,7 @@ def handler(event: dict) -> dict:
 
 
 if __name__ == "__main__":
-    # Start HTTP server for AgentCore Runtime
-    logger.info("Starting SCF Compliance Agent on port 8080...")
-    start_server(handler, port=8080)
+    port = int(os.environ.get("PORT", "8080"))
+    server = HTTPServer(("0.0.0.0", port), AgentHandler)
+    logger.info(f"SCF Compliance Agent listening on port {port}")
+    server.serve_forever()

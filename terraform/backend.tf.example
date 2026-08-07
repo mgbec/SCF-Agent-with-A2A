@@ -1,0 +1,11 @@
+# Uncomment and configure for remote state management (recommended for teams)
+#
+# terraform {
+#   backend "s3" {
+#     bucket         = "your-terraform-state-bucket"
+#     key            = "scf-compliance-agent/terraform.tfstate"
+#     region         = "us-east-1"
+#     dynamodb_table = "terraform-state-lock"
+#     encrypt        = true
+#   }
+# }

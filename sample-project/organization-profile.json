@@ -1,0 +1,90 @@
+{
+  "organization": {
+    "name": "Acme HealthTech Inc.",
+    "legal_entity": "Acme HealthTech Inc., Delaware C-Corp",
+    "industry": "Healthcare Information Technology",
+    "sub_industry": "Clinical SaaS Platform",
+    "employee_count": 175,
+    "bls_firm_size_class": "5-6",
+    "scf_organization_size": "medium",
+    "annual_revenue": "$28M",
+    "founded": 2019,
+    "headquarters": "Austin, TX",
+    "offices": ["Austin, TX", "Remote (US-wide)"],
+    "geographic_operations": ["United States", "Canada"],
+    "planned_expansion": ["European Union (2027 target)"]
+  },
+  "products": [
+    {
+      "name": "CareFlow Platform",
+      "description": "Cloud-based patient engagement and clinical workflow management",
+      "users": "42 hospital systems, 380+ clinics",
+      "data_processed": ["PHI", "PII", "Insurance claims", "Clinical notes"],
+      "deployment": "Multi-tenant SaaS on AWS"
+    },
+    {
+      "name": "CareFlow Analytics",
+      "description": "AI-powered clinical decision support and population health analytics",
+      "users": "18 hospital systems (subset of CareFlow Platform customers)",
+      "data_processed": ["De-identified PHI", "Aggregated clinical data"],
+      "deployment": "Separate AWS account, dedicated ML pipeline",
+      "ai_components": ["LLM-based summarization", "Predictive models", "NLP extraction"]
+    }
+  ],
+  "data_classification": {
+    "critical": ["PHI/ePHI", "Authentication credentials", "Encryption keys"],
+    "confidential": ["PII", "Financial records", "Employee data", "Source code"],
+    "internal": ["Architecture docs", "Meeting notes", "Project plans"],
+    "public": ["Marketing materials", "API documentation", "Status page"]
+  },
+  "compliance_obligations": {
+    "regulatory": [
+      "HIPAA Security Rule",
+      "HIPAA Privacy Rule",
+      "HITECH Act",
+      "US - CA CCPA",
+      "US - NY SHIELD Act",
+      "US - TX SB 2610"
+    ],
+    "contractual": [
+      "SOC 2 Type II (annual)",
+      "HITRUST CSF (certified, r2 assessment)",
+      "BAA with all covered entity customers",
+      "State-specific DPA requirements"
+    ],
+    "aspirational": [
+      "ISO 27001:2022 (planned 2027)",
+      "SOC 2 + HIPAA combined report",
+      "EU GDPR / NIS2 (for EU expansion)"
+    ]
+  },
+  "security_team": {
+    "ciso": true,
+    "ciso_reports_to": "CTO",
+    "dedicated_security_staff": 6,
+    "security_engineers": 3,
+    "grc_analysts": 2,
+    "security_architect": 1,
+    "total_it_staff": 22,
+    "security_awareness_training": "Annual (KnowBe4)",
+    "tabletop_exercises": "Annual (IR only)"
+  },
+  "current_framework_alignment": {
+    "primary": "NIST Cybersecurity Framework 1.1",
+    "notes": "Loosely aligned, no formal gap assessment performed against CSF 2.0. Controls mapped informally to HIPAA via NIST SP 800-66."
+  },
+  "recent_audit_findings": [
+    "SOC 2 Type II (2025): 2 exceptions noted - incomplete access review evidence, missing encryption-at-rest for one legacy database",
+    "HITRUST r2 (2025): Corrective Action Plan for 4 controls related to vulnerability management timelines",
+    "Penetration Test (2025): 2 medium findings (SSRF in internal API, weak session timeout)"
+  ],
+  "known_gaps_self_reported": [
+    "No formal risk register or risk treatment plan",
+    "Incident response plan not tested beyond tabletop",
+    "Third-party vendor security reviews are inconsistent",
+    "No quantum cryptography transition planning",
+    "AI governance for CareFlow Analytics is informal",
+    "DLP not fully deployed across all data channels",
+    "BCP/DR tested annually but RTO/RPO not validated"
+  ]
+}

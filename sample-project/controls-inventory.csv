@@ -1,0 +1,73 @@
+scf_id,control_name,implementation_status,maturity_self_assessment,evidence_available,owner,last_reviewed,notes
+GOV-01,Security Compliance & Resilience Program,Implemented,2,Yes,CISO,2025-09-15,Program exists but documentation is dated. No formal SCRP charter.
+GOV-01.1,Steering Committee & Program Oversight,Implemented,2,Partial,CISO,2025-06-01,Quarterly meetings but inconsistent attendance. No formal charter.
+GOV-02,Publishing Security & Data Protection Documentation,Implemented,2,Yes,GRC Analyst,2025-11-01,Policies on SharePoint but version control is manual.
+GOV-03,Periodic Review & Update of Security Documentation,Partial,1,Partial,GRC Analyst,2025-03-01,"Reviews happen ad-hoc, not on schedule."
+GOV-04,Assigned Security & Data Protection Responsibilities,Implemented,3,Yes,CISO,2025-08-01,RACI matrix maintained in GRC tool.
+GOV-05,Measures of Performance,Partial,1,No,CISO,2024-12-01,KPIs discussed informally but no formal metrics program.
+GOV-06,Contacts With Security Authorities & Groups,Implemented,2,Yes,Security Engineer,2025-10-01,FS-ISAC membership active. No formal contact list for all authorities.
+GOV-14,Data Protection Impact Assessment (DPIA),Partial,1,Partial,GRC Analyst,2025-01-15,Only done for CareFlow Analytics launch. Not systematic.
+GOV-15,Operationalizing Security Capabilities,Implemented,2,Yes,Security Architect,2025-07-01,Controls selected and documented but assessment cadence not met.
+AAT-01,Artificial Intelligence Governance,Partial,1,No,CTO,2025-04-01,"AI ethics discussed at leadership level, no formal policy or governance body."
+AAT-02,AI Risk Management,Not Implemented,0,No,,,No formal AI risk framework or assessment.
+AAT-12,Training Data Management,Partial,1,Partial,ML Engineer Lead,2025-06-01,Training data tracked but no formal lineage or integrity validation.
+AST-01,Asset Governance,Implemented,2,Yes,IT Director,2025-09-01,CMDB maintained in ServiceNow. ~90% coverage.
+AST-02,Asset Inventories,Implemented,3,Yes,IT Director,2025-11-01,Automated discovery via AWS Config + ServiceNow integration.
+AST-05,Security of Assets & Media,Implemented,2,Yes,IT Director,2025-08-01,Encrypted laptops. Server media not applicable (cloud-only).
+BCD-01,Business Continuity Management System,Implemented,2,Partial,IT Director,2025-05-01,BCP exists but not comprehensively tested. DR tested annually.
+BCD-02,Business Impact Analysis,Implemented,2,Yes,IT Director,2025-03-01,BIA completed for critical services. Not updated in 18 months.
+BCD-04,Contingency Plan Testing & Exercises,Partial,1,Partial,IT Director,2025-04-01,Annual DR failover test only. No full BCP exercise.
+CHG-01,Change Management Program,Implemented,3,Yes,Engineering VP,2025-10-01,Formal CAB process. All production changes via PR + CI/CD.
+CHG-02,Configuration Change Control,Implemented,3,Yes,DevOps Lead,2025-11-01,GitOps with Terraform. Change approval required.
+CLD-01,Cloud Security,Implemented,2,Yes,Security Architect,2025-09-01,AWS Well-Architected review done. Some findings pending.
+CLD-02,Cloud Security Architecture,Implemented,3,Yes,Security Architect,2025-09-01,Multi-account strategy. Landing zone implemented.
+CPL-01,Statutory Regulatory & Contractual Compliance,Implemented,2,Yes,GRC Analyst,2025-07-01,Compliance register maintained. Reviewed quarterly.
+CPL-02,Security Controls Oversight,Partial,2,Partial,GRC Analyst,2025-06-01,Annual control assessments. No continuous monitoring.
+CPL-03,Control Conformity Monitoring,Not Implemented,0,No,,,No automated CCM solution in place.
+CRY-01,Use of Cryptographic Controls,Implemented,3,Yes,Security Architect,2025-10-01,TLS 1.2+ enforced. AES-256 at rest. Key management via AWS KMS.
+CRY-03,Transmission Confidentiality,Implemented,3,Yes,DevOps Lead,2025-10-01,All data in transit encrypted. HSTS enabled.
+CRY-05,Encrypting Data At Rest,Implemented,2,Yes,DevOps Lead,2025-08-01,"Most DBs encrypted. One legacy PostgreSQL instance pending migration (SOC 2 exception)."
+DCH-01,Data Protection & Privacy Program,Implemented,2,Yes,GRC Analyst,2025-07-01,Privacy program exists. DPO role assigned.
+DCH-06,Data Quality,Partial,1,No,Data Engineering,2025-01-01,Informal data quality checks. No formal program.
+END-01,Endpoint Security,Implemented,3,Yes,Security Engineer,2025-11-01,CrowdFalcon EDR on all endpoints. MDM for mobile.
+END-08,Malicious Code Protections,Implemented,3,Yes,Security Engineer,2025-11-01,EDR + email security gateway. Sandboxing for attachments.
+HRS-01,Human Resources Security Program,Implemented,2,Yes,HR Director,2025-09-01,Background checks. Onboarding/offboarding procedures documented.
+HRS-04,Personnel Screening,Implemented,3,Yes,HR Director,2025-11-01,Background + reference checks for all. Enhanced for privileged roles.
+HRS-05,Terms of Employment,Implemented,3,Yes,HR Director,2025-06-01,NDA and AUP signed at hire.
+IAC-01,Identity & Access Management Program,Implemented,3,Yes,Security Engineer,2025-10-01,"Okta SSO + MFA for all apps. Role-based access. JML process documented."
+IAC-06,Least Privilege,Implemented,2,Yes,Security Engineer,2025-09-01,Implemented for production. Dev environments less strictly controlled.
+IAC-07,Separation of Duties,Implemented,2,Yes,Security Engineer,2025-07-01,Enforced for financial and production systems. Some gaps in dev tooling.
+IAC-10,Privileged Access Management,Implemented,2,Yes,Security Engineer,2025-10-01,"PAM tool (CyberArk) for infrastructure. Application-level privileged access managed manually."
+IAC-15,Account Management,Implemented,2,Partial,Security Engineer,2025-08-01,"Quarterly access reviews. SOC 2 exception: Q2 review evidence incomplete for 3 systems."
+IAC-21,Multi-Factor Authentication (MFA),Implemented,3,Yes,Security Engineer,2025-11-01,MFA required for all corporate and production access. Hardware keys for admins.
+IRO-01,Incident Response Program,Implemented,2,Yes,Security Engineer,2025-07-01,IR plan documented. SIEM alerts configured. On-call rotation exists.
+IRO-02,Incident Handling,Implemented,2,Yes,Security Engineer,2025-10-01,Playbooks for common scenarios. Jira for tracking. Not all scenarios covered.
+IRO-04,Incident Response Plan,Implemented,2,Partial,CISO,2025-07-01,Plan exists. Only tabletop tested. No purple team or full simulation.
+IRO-09,Incident Response Lessons Learned,Partial,1,Partial,Security Engineer,2025-05-01,Post-mortems done for major incidents but not systematically tracked.
+MNT-01,Maintenance Program,Implemented,2,Yes,DevOps Lead,2025-09-01,Patching via AWS SSM. Monthly patch cycles for EC2.
+MON-01,Continuous Monitoring,Implemented,2,Yes,Security Engineer,2025-11-01,"CloudTrail + GuardDuty + SIEM (Splunk). Alert fatigue is a problem."
+MON-02,Centralized Event Log Collection & Correlation,Implemented,3,Yes,Security Engineer,2025-11-01,All logs to Splunk. Correlation rules for common attack patterns.
+NET-01,Network Security,Implemented,3,Yes,Security Architect,2025-10-01,VPC segmentation. Security groups. NACLs for sensitive subnets.
+NET-02,Network Access Controls,Implemented,3,Yes,DevOps Lead,2025-10-01,Zero-trust network access for remote. VPN deprecated.
+NET-06,Network Segmentation,Implemented,2,Yes,Security Architect,2025-09-01,"Macro-segmentation done (VPCs). Micro-segmentation incomplete."
+PES-01,Physical & Environmental Protection Program,Implemented,3,Yes,IT Director,2025-06-01,AWS data centers. Office has badge access + cameras.
+PRI-01,Data Privacy Program,Implemented,2,Yes,GRC Analyst,2025-08-01,Privacy policy published. Privacy officer designated. DSAR process exists.
+PRI-03,Data Subject Consent,Implemented,2,Yes,Product,2025-07-01,Consent collected at signup. Granular consent for marketing.
+RSK-01,Risk Management Program,Partial,1,Partial,CISO,2025-03-01,"Risk discussions happen at leadership level. No formal risk register, risk appetite statement, or treatment plans."
+RSK-04,Risk Assessment,Partial,1,Partial,GRC Analyst,2025-02-01,Annual risk assessment done but methodology not standardized. Results not tracked in a register.
+RSK-06,Risk Remediation,Not Implemented,0,No,,,No formal risk treatment process. Findings tracked in Jira ad-hoc.
+SAT-01,Security & Privacy Awareness Program,Implemented,2,Yes,HR/Security,2025-11-01,KnowBe4 training. Monthly phishing simulations. Completion tracked.
+SAT-02,Role-Based Security Training,Partial,1,Partial,Security Engineer,2025-04-01,Developer secure coding training done once. Not recurring or tracked for all roles.
+SEA-01,Secure Engineering & Architecture Program,Implemented,2,Yes,Security Architect,2025-08-01,Architecture review for new services. Threat modeling done inconsistently.
+SEA-02,Alignment With Enterprise Architecture,Implemented,2,Yes,Security Architect,2025-07-01,Security architecture aligned with cloud landing zone design.
+TDA-01,Secure Development Program,Implemented,2,Yes,Engineering VP,2025-09-01,SSDLC documented. SAST/DAST in CI/CD. Dependency scanning.
+TDA-03,Security Requirements Definition,Partial,1,Partial,Engineering,2025-05-01,Security requirements in user stories inconsistent. No formal process.
+TDA-08,Secure Coding,Implemented,2,Yes,Engineering VP,2025-10-01,Coding standards published. SAST enforced in CI. PR reviews required.
+TPM-01,Third-Party Management Program,Partial,1,Partial,Procurement/GRC,2025-06-01,"Vendor list maintained. Security assessments not done consistently. No formal tiering."
+TPM-03,Supply Chain Risk Management (SCRM),Not Implemented,0,No,,,No SCRM program. Vendor dependencies not formally tracked.
+TPM-04,Third-Party Security Assessments,Partial,1,Partial,GRC Analyst,2025-04-01,SIG questionnaire sent to some vendors. No formal schedule or risk tiering.
+THR-01,Threat Intelligence Program,Partial,1,Partial,Security Engineer,2025-08-01,Subscribed to threat feeds. Ad-hoc review. No formal TI program or IOC integration.
+VPM-01,Vulnerability & Patch Management Program,Implemented,2,Yes,DevOps Lead,2025-11-01,Qualys scanning. Monthly patches. HITRUST CAP: SLA compliance at 78% (target 95%).
+VPM-02,Vulnerability Remediation,Implemented,2,Partial,DevOps Lead,2025-11-01,"Critical: 7 days, High: 30 days targets. Actual performance below SLA for 22% of findings."
+WEB-01,Web Security Program,Implemented,2,Yes,DevOps Lead,2025-10-01,WAF deployed. OWASP Top 10 testing in CI. Annual pen test.
+QTS-01,Quantum Risk Governance,Not Implemented,0,No,,,Not started. On 2027 roadmap.

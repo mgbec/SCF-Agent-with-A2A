@@ -123,19 +123,11 @@ class AgentHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             event = {"prompt": body.decode("utf-8", errors="replace")}
 
-        # AgentCore sends the prompt in different possible fields
-        prompt = (
-            event.get("prompt")
-            or event.get("input")
-            or event.get("message")
-            or event.get("query")
-            or str(event)
-        )
+        result = handler(event)
+        status_code = result.get("statusCode", 200)
+        response_body = result.get("body", "{}").encode("utf-8")
 
-        result = handler({"prompt": prompt, "session_id": event.get("session_id", "default")})
-
-        response_body = json.dumps(result.get("body", result)).encode("utf-8")
-        self.send_response(result.get("statusCode", 200))
+        self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(response_body)))
         self.end_headers()
@@ -156,56 +148,37 @@ class AgentHandler(BaseHTTPRequestHandler):
 
 def handler(event: dict) -> dict:
     """Process incoming requests."""
-    prompt = event.get("prompt", "")
+    prompt = (
+        event.get("prompt")
+        or event.get("input")
+        or event.get("message")
+        or event.get("query")
+        or json.dumps(event)
+    )
     session_id = event.get("session_id", "default")
 
-    logger.info(f"Processing request for session: {session_id}")
+    logger.info(f"Processing request for session: {session_id}, prompt length: {len(prompt)}")
 
     try:
         agent = _get_agent()
         result = agent(prompt)
         return {
             "statusCode": 200,
-            "body": {
+            "body": json.dumps({
                 "response": str(result),
                 "session_id": session_id,
-            },
+            }),
         }
     except Exception as e:
         logger.error(f"Agent execution error: {e}", exc_info=True)
         return {
             "statusCode": 500,
-            "body": {"error": str(e)},
+            "body": json.dumps({"error": str(e)}),
         }
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
-    logger.info(f"SCF Compliance Agent starting on port {port}")
-
-    # Try to use the AgentCore SDK server if available
-    try:
-        from bedrock_agentcore.runtime import Runtime
-
-        runtime = Runtime()
-
-        @runtime.handler
-        def handle_request(event):
-            prompt = (
-                event.get("prompt")
-                or event.get("input")
-                or event.get("message")
-                or event.get("query")
-                or str(event)
-            )
-            agent = _get_agent()
-            result = agent(prompt)
-            return {"response": str(result)}
-
-        runtime.serve()
-    except ImportError:
-        # Fallback to stdlib HTTP server
-        logger.info("AgentCore SDK not available, using stdlib HTTP server")
-        server = HTTPServer(("0.0.0.0", port), AgentHandler)
-        logger.info(f"Listening on port {port}")
-        server.serve_forever()
+    server = HTTPServer(("0.0.0.0", port), AgentHandler)
+    logger.info(f"SCF Compliance Agent listening on port {port}")
+    server.serve_forever()

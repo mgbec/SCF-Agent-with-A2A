@@ -128,7 +128,9 @@ resource "aws_iam_role_policy" "knowledge_base_s3" {
         Effect = "Allow"
         Action = [
           "s3:GetObject",
-          "s3:ListBucket"
+          "s3:ListBucket",
+          "s3:PutObject",
+          "s3:DeleteObject"
         ]
         Resource = [
           aws_s3_bucket.scf_data.arn,
@@ -153,6 +155,31 @@ resource "aws_iam_role_policy" "knowledge_base_bedrock" {
           "bedrock:InvokeModelWithResponseStream"
         ]
         Resource = "arn:aws:bedrock:${local.region}::foundation-model/${var.embedding_model_id}"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "knowledge_base_s3vectors" {
+  name = "s3-vectors-access"
+  role = aws_iam_role.knowledge_base.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3vectors:CreateIndex",
+          "s3vectors:DeleteIndex",
+          "s3vectors:GetIndex",
+          "s3vectors:ListIndexes",
+          "s3vectors:PutVectors",
+          "s3vectors:GetVectors",
+          "s3vectors:DeleteVectors",
+          "s3vectors:QueryVectors"
+        ]
+        Resource = "*"
       }
     ]
   })
@@ -185,8 +212,8 @@ resource "aws_bedrockagent_knowledge_base" "scf" {
 
 # IAM role propagation delay - Bedrock needs the role to be fully propagated
 resource "time_sleep" "wait_for_kb_role" {
-  depends_on      = [aws_iam_role.knowledge_base, aws_iam_role_policy.knowledge_base_s3, aws_iam_role_policy.knowledge_base_bedrock]
-  create_duration = "20s"
+  depends_on      = [aws_iam_role.knowledge_base, aws_iam_role_policy.knowledge_base_s3, aws_iam_role_policy.knowledge_base_bedrock, aws_iam_role_policy.knowledge_base_s3vectors]
+  create_duration = "30s"
 }
 
 resource "aws_bedrockagent_data_source" "scf_json" {

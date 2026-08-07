@@ -117,6 +117,11 @@ resource "aws_iam_role" "knowledge_base" {
   })
 }
 
+resource "aws_iam_role_policy_attachment" "knowledge_base_bedrock_full" {
+  role       = aws_iam_role.knowledge_base.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
+}
+
 resource "aws_iam_role_policy" "knowledge_base_s3" {
   name = "s3-access"
   role = aws_iam_role.knowledge_base.id
@@ -141,25 +146,6 @@ resource "aws_iam_role_policy" "knowledge_base_s3" {
   })
 }
 
-resource "aws_iam_role_policy" "knowledge_base_bedrock" {
-  name = "bedrock-access"
-  role = aws_iam_role.knowledge_base.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "bedrock:InvokeModel",
-          "bedrock:InvokeModelWithResponseStream"
-        ]
-        Resource = "arn:aws:bedrock:${local.region}::foundation-model/${var.embedding_model_id}"
-      }
-    ]
-  })
-}
-
 resource "aws_iam_role_policy" "knowledge_base_s3vectors" {
   name = "s3-vectors-access"
   role = aws_iam_role.knowledge_base.id
@@ -170,14 +156,7 @@ resource "aws_iam_role_policy" "knowledge_base_s3vectors" {
       {
         Effect = "Allow"
         Action = [
-          "s3vectors:CreateIndex",
-          "s3vectors:DeleteIndex",
-          "s3vectors:GetIndex",
-          "s3vectors:ListIndexes",
-          "s3vectors:PutVectors",
-          "s3vectors:GetVectors",
-          "s3vectors:DeleteVectors",
-          "s3vectors:QueryVectors"
+          "s3vectors:*"
         ]
         Resource = "*"
       }
@@ -204,16 +183,18 @@ resource "aws_bedrockagent_knowledge_base" "scf" {
   }
 
   depends_on = [
+    aws_iam_role_policy_attachment.knowledge_base_bedrock_full,
     aws_iam_role_policy.knowledge_base_s3,
-    aws_iam_role_policy.knowledge_base_bedrock,
+    aws_iam_role_policy.knowledge_base_s3vectors,
     time_sleep.wait_for_kb_role,
   ]
 }
 
 # IAM role propagation delay - Bedrock needs the role to be fully propagated
+# IAM is eventually consistent; 60s accounts for worst-case propagation
 resource "time_sleep" "wait_for_kb_role" {
-  depends_on      = [aws_iam_role.knowledge_base, aws_iam_role_policy.knowledge_base_s3, aws_iam_role_policy.knowledge_base_bedrock, aws_iam_role_policy.knowledge_base_s3vectors]
-  create_duration = "30s"
+  depends_on      = [aws_iam_role.knowledge_base, aws_iam_role_policy_attachment.knowledge_base_bedrock_full, aws_iam_role_policy.knowledge_base_s3, aws_iam_role_policy.knowledge_base_s3vectors]
+  create_duration = "60s"
 }
 
 resource "aws_bedrockagent_data_source" "scf_json" {

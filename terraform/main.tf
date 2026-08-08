@@ -353,7 +353,7 @@ resource "aws_iam_role_policy" "agentcore_bedrock" {
           "bedrock:InvokeModel",
           "bedrock:InvokeModelWithResponseStream"
         ]
-        Resource = "arn:aws:bedrock:${local.region}::foundation-model/${var.bedrock_model_id}"
+        Resource = "*"
       },
       {
         Effect = "Allow"

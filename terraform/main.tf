@@ -476,6 +476,10 @@ resource "aws_bedrockagentcore_agent_runtime" "compliance_agent" {
     network_mode = "PUBLIC"
   }
 
+  lifecycle_configuration {
+    idle_runtime_session_timeout = 300
+  }
+
   protocol_configuration {
     server_protocol = "HTTP"
   }

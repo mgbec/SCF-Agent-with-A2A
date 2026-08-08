@@ -48,12 +48,13 @@ gap analysis, and remediation guidance.
 
 | Source | Role | When Used |
 |--------|------|-----------|
-| S3 + Bedrock Knowledge Base (S3 Vectors) | Authoritative SCF control data | Control lookups, mappings, maturity criteria, gap analysis |
+| Bedrock Knowledge Base (S3 Vectors) | Fast vector retrieval of SCF controls | Every query — agent searches for relevant controls |
 | Bedrock AgentCore Web Search | Supplementary current context | Regulatory updates, CVE intel, breach cases, best practices |
 
-The Knowledge Base uses **S3 Vectors** as its storage backend — Bedrock manages the
-vector index automatically. No OpenSearch cluster or collection to maintain. Your
-SCF JSON lives in S3, and Bedrock handles embedding and retrieval.
+The agent uses **Knowledge Base retrieval** (vector search) instead of loading raw files.
+This returns relevant control chunks in milliseconds, eliminating timeout issues for
+complex queries. The model then reasons over the retrieved data to produce gap analyses,
+maturity assessments, evidence checklists, and recommendations — no custom Python logic needed.
 
 ### Auto-Update Pipeline
 
@@ -78,26 +79,35 @@ No manual intervention required — your team gets an email when the data update
 ## Quick Start
 
 ```powershell
-# 1. Initialize Terraform
-cd terraform
+# 1. Run preflight check (validates model, credentials, region)
+cd scripts
+python preflight.py
+
+# 2. Initialize Terraform
+cd ..\terraform
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars with your region, model, and notification email
 
 terraform init
-terraform plan
 terraform apply
 
-# 2. Upload SCF data to S3 and sync the Knowledge Base
+# 3. Build and push the agent container (ARM64 required)
+cd ..\agent
+# Login to ECR
+cmd /c "aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com"
+# Build and push (uses pre-downloaded ARM64 wheels for speed)
+cmd /c "docker buildx build --platform linux/arm64 -t <ecr-url>:latest --push ."
+
+# 4. Upload SCF data to S3 and sync the Knowledge Base
 cd ..\scripts
 python upload_scf_data.py
 
-# 3. Test the agent
-python test_agent.py
-```
+# 5. Run preflight again to confirm everything works
+python preflight.py
 
-Terraform automatically packages the `agent/` directory as a zip, uploads it to S3,
-and configures AgentCore Runtime to use it with Python 3.13. No Docker or container
-builds required.
+# 6. Query the agent
+python ask.py --interactive
+```
 
 ## Querying the Agent
 
@@ -236,16 +246,18 @@ scf-compliance-agent/
 ├── agent/
 │   ├── main.py                 # Agent entry point (Strands Agents framework)
 │   ├── tools/
-│   │   ├── scf_lookup.py      # Control lookup by ID, domain, keyword
-│   │   ├── framework_mapper.py # Cross-framework mapping (252+ frameworks)
-│   │   ├── maturity_assessor.py # SCR-CMM Level 0-5 assessment
-│   │   ├── gap_analyzer.py    # Gap analysis + remediation guidance
+│   │   ├── kb_retrieval.py    # Knowledge Base vector search (primary data access)
 │   │   └── web_research.py    # Live web search (regulatory, CVE, breaches)
-│   └── requirements.txt
+│   ├── wheels/                 # Pre-downloaded ARM64 wheels (fast Docker builds)
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── lambda/
 │   └── scf_updater/
 │       └── handler.py          # Weekly SCF version check + update
 ├── scripts/
+│   ├── ask.py                  # CLI query tool (interactive + single-shot)
+│   ├── generate_report.py      # Multi-step report generator
+│   ├── preflight.py            # Pre-deployment validation
 │   ├── upload_scf_data.py      # Initial data load to S3
 │   └── test_agent.py           # Integration test suite
 └── sample-project/             # Fictional company for demos (Acme HealthTech)

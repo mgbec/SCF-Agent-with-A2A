@@ -35,6 +35,10 @@ def _get_agent():
         get_scf_control_details,
         search_scf_maturity,
     )
+    from tools.dynamo_lookup import (
+        get_control_full_details,
+        get_controls_by_domain,
+    )
     from tools.web_research import (
         search_regulatory_updates,
         search_vulnerability_intelligence,
@@ -51,10 +55,15 @@ def _get_agent():
         model=model,
         system_prompt=SYSTEM_PROMPT,
         tools=[
+            # KB search (fast vector retrieval - finds relevant controls)
             search_scf_controls,
             search_scf_by_framework,
             get_scf_control_details,
             search_scf_maturity,
+            # DynamoDB (full detail retrieval - complete data, no size limits)
+            get_control_full_details,
+            get_controls_by_domain,
+            # Web research (supplementary - live internet)
             search_regulatory_updates,
             search_vulnerability_intelligence,
             search_breach_cases,
@@ -76,23 +85,28 @@ You have access to a Knowledge Base containing the complete SCF 2026.2 framework
 - Size-appropriate implementation guidance
 
 YOUR TOOLS:
-1. search_scf_controls - Search the KB for any SCF topic (controls, mappings, maturity, guidance)
+1. search_scf_controls - Search the KB for relevant controls (fast, use for discovery)
 2. search_scf_by_framework - Find controls mapped to a specific regulation
-3. get_scf_control_details - Get full details for a specific control ID
-4. search_scf_maturity - Get maturity criteria for a domain at a target level
-5. search_regulatory_updates - Search the web for latest regulatory news
-6. search_vulnerability_intelligence - Search for current CVE/threat data
-7. search_breach_cases - Find recent breach cases and enforcement actions
-8. search_best_practices - Get current industry implementation guidance
+3. get_scf_control_details - Quick KB lookup for a specific control ID
+4. search_scf_maturity - Find maturity criteria for a domain
+5. get_control_full_details - Get COMPLETE data from DynamoDB (full maturity criteria, all mappings)
+6. get_controls_by_domain - Get all controls in a domain from DynamoDB
+7. search_regulatory_updates - Search the web for latest regulatory news
+8. search_vulnerability_intelligence - Search for current CVE/threat data
+9. search_breach_cases - Find recent breach cases and enforcement actions
+10. search_best_practices - Get current industry implementation guidance
 
 HOW TO HANDLE REQUESTS:
-- For gap analysis: use search_scf_by_framework to find what the framework requires,
-  then compare against the user's implemented controls to identify gaps
-- For control lookups: use get_scf_control_details
-- For maturity assessment: use search_scf_maturity
-- For "what maps to X": use search_scf_by_framework
-- For general questions: use search_scf_controls with relevant keywords
-- Search multiple times if needed to get comprehensive results
+- Step 1: Use KB search tools (1-4) to FIND relevant controls quickly
+- Step 2: Use DynamoDB tools (5-6) to GET full details for those specific controls
+- This two-step approach is fast AND complete
+- For gap analysis: search by framework → get full details for matched controls
+- For maturity assessment: search maturity → get full criteria from DynamoDB
+- Never skip step 2 if the user needs maturity criteria or evidence details
+
+NOTE ON DATA: Maturity criteria in KB search results are summarized. Use 
+get_control_full_details for complete SCR-CMM level criteria. For the absolute 
+full text, refer users to securecontrolsframework.com/free-content/scf-download
 
 RESPONSE FORMAT:
 - Keep responses focused and under 4000 tokens

@@ -51,3 +51,8 @@ output "memory_id" {
   description = "ID of the AgentCore memory for compliance sessions"
   value       = aws_bedrockagentcore_memory.compliance.id
 }
+
+output "dynamodb_table_name" {
+  description = "DynamoDB table name for full SCF control data"
+  value       = aws_dynamodb_table.scf_controls.name
+}

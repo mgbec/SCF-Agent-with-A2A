@@ -1,0 +1,30 @@
+﻿[
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+    "INFO:__main__:HTTP: 127.0.0.1 - \"GET /ping HTTP/1.1\" 200 -",
+aws : 
+At line:1 char:1
++ aws logs filter-log-events --log-group-name "/aws/bedrock-agentcore/r ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+aws: [ERROR]: 'charmap' codec can't encode character '\x89' in position 117: character maps to 
+<undefined>
+    "INFO:__main__:HTTP: 127.0.0.1 - code 400, message Bad request version (\"\\x13\\x01\\x13\\x02\\x13\\x03└+└/└,└0╠⌐╠¿└$└(└#└'\\x00 \\x01\\x00\\x00«\\x00+\\x00\\x05\\x04\\x03\\x04\\x03\\x03\\x00\")"

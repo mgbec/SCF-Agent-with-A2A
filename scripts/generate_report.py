@@ -168,21 +168,35 @@ def generate_report(framework: str, controls: list, org_size: str = "medium", ou
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate SCF compliance assessment report")
-    parser.add_argument("--framework", required=True,
-                        help="Target framework (HIPAA, 'EU NIS2', 'PCI DSS', 'ISO 27001', etc.)")
-    parser.add_argument("--controls", default="",
-                        help="Comma-separated list of implemented SCF control IDs")
-    parser.add_argument("--controls-file",
-                        help="File with one control ID per line")
+    parser = argparse.ArgumentParser(
+        description="Generate SCF compliance assessment report",
+        epilog="""
+Examples:
+  python generate_report.py --framework HIPAA --controls "GOV-01,IAC-01,NET-01,CRY-01"
+  python generate_report.py --framework "EU NIS2" --controls-file controls.txt --org-size medium
+  python generate_report.py --prompt "We're a 175-person healthcare company preparing for HIPAA..."
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--framework", help="Target framework (HIPAA, 'EU NIS2', 'PCI DSS', etc.)")
+    parser.add_argument("--controls", default="", help="Comma-separated implemented SCF control IDs")
+    parser.add_argument("--controls-file", help="File with one control ID per line")
     parser.add_argument("--org-size", default="medium",
-                        choices=["micro_small", "small", "medium", "large", "enterprise"],
-                        help="Organization size for solution recommendations")
-    parser.add_argument("--output", help="Output file path (default: auto-generated)")
+                        choices=["micro_small", "small", "medium", "large", "enterprise"])
+    parser.add_argument("--output", help="Output file path")
+    parser.add_argument("--prompt", help="Natural language description (auto-generates report)")
 
     args = parser.parse_args()
 
-    # Get controls list
+    if args.prompt:
+        # Natural language mode - run the full prompt in steps
+        generate_from_prompt(args.prompt, args.output)
+        return
+
+    if not args.framework:
+        parser.print_help()
+        sys.exit(1)
+
     controls = []
     if args.controls:
         controls = [c.strip() for c in args.controls.split(",") if c.strip()]
@@ -191,10 +205,62 @@ def main():
             controls = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
     if not controls:
-        print("ERROR: Provide controls via --controls or --controls-file")
+        print("ERROR: Provide controls via --controls, --controls-file, or use --prompt")
         sys.exit(1)
 
     generate_report(args.framework, controls, args.org_size, args.output)
+
+
+def generate_from_prompt(prompt: str, output_file: str = None):
+    """Generate report from a natural language prompt by breaking into steps."""
+    session_id = f"report-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+    print("🔍 Generating compliance report from your prompt...")
+    print(f"   Prompt: {prompt[:80]}...")
+    print()
+
+    sections = []
+
+    # Step 1: Gap analysis
+    print("  [1/3] Analyzing gaps...")
+    gap_prompt = f"{prompt}\n\nFocus on: identify the top 10 compliance gaps, prioritized by weight. For each gap show the SCF control ID, name, framework reference, and weight."
+    gap_response = invoke(gap_prompt, session_id)
+    sections.append(("Compliance Gap Analysis", gap_response))
+
+    # Step 2: Compensating controls
+    print("  [2/3] Generating compensating controls and remediation...")
+    comp_prompt = "For the gaps you just identified, provide compensating controls for each. Include specific actionable steps, tools or processes to implement, and a realistic timeline."
+    comp_response = invoke(comp_prompt, session_id)
+    sections.append(("Compensating Controls & Remediation", comp_response))
+
+    # Step 3: Evidence checklist
+    print("  [3/3] Building evidence request checklist...")
+    evidence_prompt = "Now generate an evidence request checklist for each gap. Include: evidence artifacts needed (documents, screenshots, configs), the responsible role, and how often evidence must be refreshed."
+    evidence_response = invoke(evidence_prompt, session_id)
+    sections.append(("Evidence Request Checklist", evidence_response))
+
+    # Assemble
+    report = []
+    report.append("# Compliance Assessment Report")
+    report.append(f"\n**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    report.append(f"\n**Request:** {prompt}")
+    report.append("\n---\n")
+
+    for title, content in sections:
+        report.append(f"## {title}\n")
+        report.append(content)
+        report.append("\n---\n")
+
+    report_text = "\n".join(report)
+
+    if not output_file:
+        output_file = f"compliance-report-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(report_text)
+
+    print(f"\n✅ Report generated: {output_file}")
+    print(f"   Size: {len(report_text):,} characters")
 
 
 if __name__ == "__main__":

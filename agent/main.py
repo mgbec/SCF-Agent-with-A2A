@@ -115,7 +115,7 @@ class AgentHandler(BaseHTTPRequestHandler):
     """HTTP handler for AgentCore Runtime contract.
 
     AgentCore requires:
-    - POST /invocations - process agent requests (supports SSE streaming)
+    - POST /invocations - process agent requests
     - GET /ping - health check (return {"status": "Healthy"})
     """
 
@@ -135,73 +135,6 @@ class AgentHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             event = {"prompt": body.decode("utf-8", errors="replace")}
 
-        # Check if client accepts SSE streaming
-        accept = self.headers.get("Accept", "")
-        use_streaming = "text/event-stream" in accept
-
-        if use_streaming:
-            self._handle_streaming(event)
-        else:
-            self._handle_json(event)
-
-    def _handle_streaming(self, event: dict):
-        """Stream response as Server-Sent Events."""
-        prompt = (
-            event.get("prompt")
-            or event.get("input")
-            or event.get("message")
-            or event.get("query")
-            or json.dumps(event)
-        )
-        session_id = event.get("session_id", "default")
-        logger.info(f"SSE request for session: {session_id}, prompt length: {len(prompt)}")
-
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
-
-        try:
-            agent = _get_agent()
-
-            # Use Strands streaming to get chunks as they're generated
-            full_response = []
-            for event_data in agent.stream(prompt):
-                # Strands emits different event types
-                if hasattr(event_data, "data"):
-                    chunk = str(event_data.data)
-                elif isinstance(event_data, dict):
-                    if "data" in event_data:
-                        chunk = str(event_data["data"])
-                    elif "text" in event_data:
-                        chunk = event_data["text"]
-                    else:
-                        continue
-                elif isinstance(event_data, str):
-                    chunk = event_data
-                else:
-                    continue
-
-                if chunk:
-                    full_response.append(chunk)
-                    sse_line = f"data: {json.dumps({'text': chunk})}\n\n"
-                    self.wfile.write(sse_line.encode("utf-8"))
-                    self.wfile.flush()
-
-            # Send done event
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
-
-        except Exception as e:
-            logger.error(f"Streaming error: {e}", exc_info=True)
-            error_msg = f"data: {json.dumps({'error': str(e)})}\n\n"
-            self.wfile.write(error_msg.encode("utf-8"))
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
-
-    def _handle_json(self, event: dict):
-        """Standard JSON response (non-streaming)."""
         result = handler(event)
         response_body = json.dumps(result).encode("utf-8")
 

@@ -362,6 +362,13 @@ resource "aws_iam_role_policy" "agentcore_bedrock" {
           "bedrock:RetrieveAndGenerate"
         ]
         Resource = aws_bedrockagent_knowledge_base.scf.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:Retrieve"
+        ]
+        Resource = "arn:aws:bedrock:${local.region}:${local.account_id}:knowledge-base/${aws_bedrockagent_knowledge_base.scf.id}"
       }
     ]
   })

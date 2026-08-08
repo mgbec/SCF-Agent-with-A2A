@@ -99,6 +99,127 @@ Terraform automatically packages the `agent/` directory as a zip, uploads it to 
 and configures AgentCore Runtime to use it with Python 3.13. No Docker or container
 builds required.
 
+## Querying the Agent
+
+### Interactive Mode (recommended for exploration)
+
+```powershell
+cd scripts
+python ask.py --interactive
+```
+
+This gives you a conversational chat loop. Type `quit` to exit, `clear` to start a new session.
+
+### Single Query
+
+```powershell
+python ask.py "Look up SCF control GOV-01 and show me the evidence requirements"
+```
+
+### Piped Input
+
+```powershell
+echo "What controls map to HIPAA?" | python ask.py
+```
+
+### Raw AWS CLI
+
+```powershell
+$payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"prompt":"your question"}'))
+aws bedrock-agentcore invoke-agent-runtime `
+  --agent-runtime-arn (terraform output -raw agent_runtime_arn) `
+  --payload $payload --region us-east-1 response.json
+Get-Content response.json | ConvertFrom-Json | Select-Object -ExpandProperty response
+```
+
+### Authentication
+
+The agent is secured by AWS IAM. Anyone invoking it needs AWS credentials with
+`bedrock-agentcore:InvokeAgentRuntime` permission on the agent ARN. No API keys,
+no OAuth — your existing `aws configure` credentials handle it automatically.
+
+## Sample Queries
+
+### Control Lookup
+```
+Look up SCF control IAC-15 and show me the full maturity criteria for Levels 2 and 3
+```
+
+### Framework Mapping
+```
+What SCF controls map to EU NIS2 requirements? Show me the top 15 with their NIS2 article references.
+```
+
+### Gap Analysis with Compensating Controls
+```
+We are a medium healthcare SaaS company (175 employees) with these controls implemented:
+GOV-01, GOV-02, IAC-01, IAC-06, IAC-15, IAC-21, NET-01, NET-02, CRY-01, CRY-03,
+IRO-01, IRO-02, MON-01, MON-02, END-01, VPM-01, SAT-01, HRS-01, TDA-01.
+
+Perform a HIPAA gap analysis. For the top 10 missing controls:
+1. Suggest compensating controls we can implement while working toward full compliance
+2. List the specific evidence artifacts an auditor would request
+3. Recommend the conformity cadence for ongoing monitoring
+```
+
+### Evidence Request Checklist
+```
+For the IAC (Identity & Access Control) domain, generate an evidence request checklist
+for a SOC 2 Type II audit. Include the SCF control ID, evidence artifacts needed,
+assessment question, and conformity cadence.
+```
+
+### Maturity Assessment
+```
+Assess our Governance (GOV) domain maturity against SCR-CMM Level 3. We have:
+- A CISO reporting to CTO with 6 security staff
+- Information Security Policy (current)
+- Quarterly steering committee (inconsistent attendance)
+- No formal metrics program
+- Policies managed in SharePoint with manual version control
+
+What specific Level 3 criteria are we missing?
+```
+
+### Audit Remediation Plan
+```
+Our SOC 2 audit found 2 exceptions:
+1. IAC-15 (Account Management) - incomplete quarterly access review evidence
+2. CRY-05 (Encrypting Data At Rest) - one legacy database not encrypted
+
+For each, provide:
+- The full SCR-CMM Level 3 criteria we need to meet
+- Compensating controls we can implement within 60 days
+- The exact evidence package to present to the auditor
+- Related controls the auditor might also examine
+```
+
+### Compliance Scoping
+```
+What controls are required for the SCF ESP Level 1 Foundational profile?
+Group them by domain and show the total count.
+```
+
+### Cross-Framework Translation
+```
+We're expanding to the EU in 2027. Map our existing HIPAA controls to EU NIS2
+requirements. Which ones transfer directly, and what new controls do we need?
+```
+
+### Quantum Readiness
+```
+What does the new SCF QTS (Quantum Security) domain require? We currently use
+TLS 1.2+, AES-256, and RSA 2048. Give us a practical 12-month roadmap for a
+medium-sized SaaS company.
+```
+
+### Third-Party Risk
+```
+Generate a vendor security assessment checklist based on SCF TPM domain controls.
+Include the assessment questions, evidence to request from vendors, and how to
+tier vendors by risk level.
+```
+
 ## Project Structure
 
 ```

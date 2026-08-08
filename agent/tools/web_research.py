@@ -1,19 +1,17 @@
 """
 Web Research Tools
 
-Uses Bedrock AgentCore Web Search (via Gateway connector) to supplement the
-static SCF knowledge base with current information from the web:
-- Latest regulatory guidance and enforcement actions
-- Current vulnerability/CVE data from NIST NVD and CISA KEV
-- Recent breach notifications and case studies
-- Framework update announcements
-- Industry best practices and analyst guidance
+Provides supplementary live web search for current information.
+Falls back gracefully if web search is not available.
+
+NOTE: The AgentCore Web Search connector requires console setup.
+If not configured, these tools return a helpful message directing
+the user to the SCF website for current information.
 """
 
 import json
 import logging
 import os
-from typing import Optional
 
 import boto3
 from strands import tool
@@ -21,220 +19,130 @@ from strands import tool
 logger = logging.getLogger(__name__)
 
 
-def _get_gateway_client():
-    """Get a boto3 client for the AgentCore Gateway (MCP web search)."""
-    return boto3.client(
-        "bedrock-agentcore",
-        region_name=os.environ.get("AWS_REGION", "us-east-1"),
-    )
-
-
-def _invoke_web_search(query: str, max_results: int = 5, domain_filter: Optional[dict] = None) -> dict:
-    """
-    Invoke the Web Search tool through the AgentCore Gateway.
-
-    The Gateway exposes Web Search as an MCP tool. We call it via the
-    gateway invoke API.
-    """
-    gateway_id = os.environ.get("GATEWAY_ID")
-    if not gateway_id:
-        return {"error": "GATEWAY_ID environment variable not set"}
-
-    client = _get_gateway_client()
-
-    # Build the tool call payload
-    tool_input = {
-        "query": query[:200],  # Web search query limit
-        "maxResults": max_results,
-    }
-
-    if domain_filter:
-        tool_input["filters"] = {"domainFilter": domain_filter}
-
-    try:
-        response = client.invoke_gateway(
-            gatewayIdentifier=gateway_id,
-            toolName="WebSearch",
-            toolInput=json.dumps(tool_input),
-        )
-
-        result = json.loads(response["body"].read().decode("utf-8"))
-        return result
-    except Exception as e:
-        logger.warning(f"Web search failed: {e}")
-        return {"error": str(e), "fallback": "Web search unavailable. Using local SCF knowledge base only."}
+def _web_search_available() -> bool:
+    """Check if web search gateway is configured and reachable."""
+    return bool(os.environ.get("GATEWAY_ID"))
 
 
 @tool
 def search_regulatory_updates(regulation: str, topic: str = "") -> str:
     """
-    Search for the latest regulatory guidance, enforcement actions, or updates
-    for a specific compliance framework or regulation.
+    Search for the latest regulatory guidance, enforcement actions, or updates.
 
     Args:
-        regulation: The regulation or framework to search for
-                   (e.g., 'HIPAA', 'NIS2', 'NIST 800-53', 'PCI DSS 4.0', 'EU AI Act')
-        topic: Optional topic to narrow the search
-               (e.g., 'enforcement action', 'implementation deadline', 'new guidance')
+        regulation: The regulation or framework (e.g., 'HIPAA', 'NIS2', 'PCI DSS 4.0')
+        topic: Optional topic (e.g., 'enforcement action', 'new guidance', 'deadline')
 
     Returns:
-        Latest web results with titles, snippets, URLs, and publication dates
+        Latest information or guidance on where to find it
     """
-    query = f"{regulation} {topic} compliance update 2026".strip()
-
-    # Prefer authoritative sources
-    result = _invoke_web_search(
-        query=query,
-        max_results=8,
-        domain_filter={
-            "include": [
-                "nist.gov", "hhs.gov", "cisa.gov", "sec.gov",
-                "enisa.europa.eu", "ico.org.uk",
-                "federalregister.gov", "congress.gov",
-                "iso.org", "pcisecuritystandards.org",
-                "securecontrolsframework.com",
-                "healthit.gov", "cms.gov",
-            ]
-        },
-    )
-
-    if "error" in result:
+    if not _web_search_available():
         return json.dumps({
-            "query": query,
-            "status": "web_search_unavailable",
-            "message": result.get("fallback", result["error"]),
-            "recommendation": "Refer to the local SCF 2026.2 knowledge base for control mappings."
-        }, indent=2)
+            "status": "web_search_not_configured",
+            "suggestion": f"For latest {regulation} updates, check: "
+                         f"hhs.gov (HIPAA), nist.gov (NIST), enisa.europa.eu (NIS2), "
+                         f"pcisecuritystandards.org (PCI DSS). "
+                         f"The SCF data in this system reflects version 2026.2.",
+        })
 
-    return json.dumps({
-        "query": query,
-        "source": "bedrock_agentcore_web_search",
-        "results": result.get("results", []),
-        "note": "Results from authoritative government and standards body sources."
-    }, indent=2)
+    # Attempt gateway-based search
+    return _invoke_web_search(f"{regulation} {topic} compliance update 2026".strip())
 
 
 @tool
 def search_vulnerability_intelligence(query: str) -> str:
     """
-    Search for current vulnerability, CVE, or threat intelligence information.
+    Search for current vulnerability or threat intelligence.
 
     Args:
-        query: The vulnerability or threat to research
-               (e.g., 'CVE-2026-1234', 'Log4Shell remediation status',
-                'CISA KEV latest additions', 'ransomware healthcare 2026')
+        query: The vulnerability or threat (e.g., 'CVE-2026-1234', 'CISA KEV latest')
 
     Returns:
-        Latest vulnerability and threat intelligence from authoritative sources
+        Vulnerability information or guidance on where to find it
     """
-    search_query = f"{query} vulnerability security advisory"
-
-    result = _invoke_web_search(
-        query=search_query,
-        max_results=8,
-        domain_filter={
-            "include": [
-                "nvd.nist.gov", "cisa.gov", "cve.org",
-                "cert.org", "us-cert.gov",
-                "mitre.org", "attack.mitre.org",
-                "kb.cert.org",
-            ]
-        },
-    )
-
-    if "error" in result:
+    if not _web_search_available():
         return json.dumps({
-            "query": search_query,
-            "status": "web_search_unavailable",
-            "message": result.get("fallback", result["error"]),
-        }, indent=2)
+            "status": "web_search_not_configured",
+            "suggestion": f"For vulnerability data, check: "
+                         f"nvd.nist.gov, cisa.gov/known-exploited-vulnerabilities-catalog, "
+                         f"and cve.org. Query: {query}",
+        })
 
-    return json.dumps({
-        "query": search_query,
-        "source": "bedrock_agentcore_web_search",
-        "results": result.get("results", []),
-        "note": "Results from NVD, CISA, MITRE, and CERT sources."
-    }, indent=2)
+    return _invoke_web_search(f"{query} vulnerability security advisory")
 
 
 @tool
 def search_breach_cases(industry: str = "healthcare", control_area: str = "") -> str:
     """
-    Search for recent data breach cases, enforcement actions, or incident
-    reports relevant to compliance assessment.
+    Search for recent data breach cases and enforcement outcomes.
 
     Args:
-        industry: Industry to focus on (e.g., 'healthcare', 'financial', 'technology')
-        control_area: Optional SCF domain or control area
-                     (e.g., 'access control', 'encryption', 'vendor management',
-                      'incident response', 'data protection')
+        industry: Industry focus (e.g., 'healthcare', 'financial')
+        control_area: Optional area (e.g., 'access control', 'encryption', 'vendor')
 
     Returns:
-        Recent breach case summaries with regulatory outcomes
+        Breach case information or guidance on where to find it
     """
-    query = f"{industry} data breach {control_area} enforcement 2025 2026".strip()
-
-    result = _invoke_web_search(
-        query=query,
-        max_results=6,
-    )
-
-    if "error" in result:
+    if not _web_search_available():
         return json.dumps({
-            "query": query,
-            "status": "web_search_unavailable",
-            "message": result.get("fallback", result["error"]),
-        }, indent=2)
+            "status": "web_search_not_configured",
+            "suggestion": f"For {industry} breach data, check: "
+                         f"hhs.gov/hipaa/for-professionals/breach-notification (HIPAA), "
+                         f"ico.org.uk/action-weve-taken (UK), "
+                         f"haveibeenpwned.com for breach databases.",
+        })
 
-    return json.dumps({
-        "query": query,
-        "source": "bedrock_agentcore_web_search",
-        "results": result.get("results", []),
-        "note": "Use breach cases to illustrate real-world consequences of control gaps."
-    }, indent=2)
+    return _invoke_web_search(f"{industry} data breach {control_area} enforcement 2026".strip())
 
 
 @tool
 def search_best_practices(topic: str, organization_size: str = "medium") -> str:
     """
-    Search for current industry best practices, implementation guides, or
-    analyst recommendations for a security/compliance topic.
+    Search for current industry best practices and implementation guides.
 
     Args:
-        topic: The security or compliance topic to research
-               (e.g., 'zero trust architecture', 'AI governance framework',
-                'post-quantum cryptography migration', 'SBOM implementation',
-                'security metrics program')
-        organization_size: Organization size context
-                          ('small', 'medium', 'large', 'enterprise')
+        topic: Security/compliance topic (e.g., 'zero trust', 'AI governance', 'SBOM')
+        organization_size: Org size context ('small', 'medium', 'large', 'enterprise')
 
     Returns:
-        Best practice guidance from industry sources
+        Best practice guidance or references to find it
     """
-    size_context = {
-        "small": "SMB small business",
-        "medium": "mid-size organization",
-        "large": "large enterprise",
-        "enterprise": "enterprise fortune 500",
-    }.get(organization_size, "organization")
-
-    query = f"{topic} best practices {size_context} implementation guide"
-
-    result = _invoke_web_search(
-        query=query,
-        max_results=8,
-    )
-
-    if "error" in result:
+    if not _web_search_available():
         return json.dumps({
-            "query": query,
-            "status": "web_search_unavailable",
-            "message": result.get("fallback", result["error"]),
-        }, indent=2)
+            "status": "web_search_not_configured",
+            "suggestion": f"For {topic} best practices, check: "
+                         f"nist.gov, cisa.gov, sans.org, csoonline.com. "
+                         f"The SCF Practitioner Guidebook also has implementation guidance: "
+                         f"securecontrolsframework.com/free-content/scf-download",
+        })
 
-    return json.dumps({
-        "query": query,
-        "source": "bedrock_agentcore_web_search",
-        "results": result.get("results", []),
-        "note": "Supplement SCF control guidance with current industry practices."
-    }, indent=2)
+    return _invoke_web_search(f"{topic} best practices {organization_size} implementation guide")
+
+
+def _invoke_web_search(query: str) -> str:
+    """Invoke web search through the AgentCore Gateway."""
+    gateway_id = os.environ.get("GATEWAY_ID")
+
+    try:
+        client = boto3.client(
+            "bedrock-agentcore",
+            region_name=os.environ.get("AWS_REGION", "us-east-1"),
+        )
+        response = client.invoke_gateway(
+            gatewayIdentifier=gateway_id,
+            toolName="WebSearch",
+            toolInput=json.dumps({"query": query[:200], "maxResults": 5}),
+        )
+        result = json.loads(response["body"].read().decode("utf-8"))
+        return json.dumps({
+            "source": "web_search",
+            "query": query,
+            "results": result.get("results", []),
+        }, indent=2)
+    except Exception as e:
+        logger.warning(f"Web search failed: {e}")
+        return json.dumps({
+            "status": "web_search_error",
+            "error": str(e),
+            "suggestion": "Web search is not available. Use the SCF data in DynamoDB for control information.",
+        })

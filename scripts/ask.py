@@ -88,6 +88,12 @@ def invoke(prompt: str, session_id: str = "cli-session") -> str:
         if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
             with open(tmp_path, "r", encoding="utf-8") as f:
                 content = f.read()
+
+            # Handle SSE format
+            if content.startswith("data:"):
+                return _parse_sse(content)
+
+            # Handle JSON format
             try:
                 data = json.loads(content)
                 return data.get("response", content)
@@ -102,6 +108,22 @@ def invoke(prompt: str, session_id: str = "cli-session") -> str:
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+def _parse_sse(content: str) -> str:
+    """Parse SSE event stream into full text."""
+    text_parts = []
+    for line in content.split("\n"):
+        if line.startswith("data: ") and line != "data: [DONE]":
+            try:
+                data = json.loads(line[6:])
+                if "text" in data:
+                    text_parts.append(data["text"])
+                elif "error" in data:
+                    text_parts.append(f"[Error: {data['error']}]")
+            except json.JSONDecodeError:
+                text_parts.append(line[6:])
+    return "".join(text_parts)
 
 
 def interactive_mode():

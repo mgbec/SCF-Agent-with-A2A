@@ -112,9 +112,21 @@ Always be precise, cite sources, and provide context-appropriate guidance."""
 
 
 class AgentHandler(BaseHTTPRequestHandler):
-    """HTTP handler for AgentCore Runtime contract."""
+    """HTTP handler for AgentCore Runtime contract.
+
+    AgentCore requires:
+    - POST /invocations - process agent requests
+    - GET /ping - health check (return {"status": "Healthy"})
+    """
 
     def do_POST(self):
+        if self.path != "/invocations":
+            self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":"not found"}')
+            return
+
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
 
@@ -124,30 +136,34 @@ class AgentHandler(BaseHTTPRequestHandler):
             event = {"prompt": body.decode("utf-8", errors="replace")}
 
         result = handler(event)
-        status_code = result.get("statusCode", 200)
-        response_body = result.get("body", "{}").encode("utf-8")
+        response_body = result.encode("utf-8") if isinstance(result, str) else json.dumps(result).encode("utf-8")
 
-        self.send_response(status_code)
+        self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(response_body)))
         self.end_headers()
         self.wfile.write(response_body)
 
     def do_GET(self):
-        """Health check endpoint."""
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        body = b'{"status":"healthy"}'
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        if self.path == "/ping":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            body = b'{"status":"Healthy"}'
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":"not found"}')
 
     def log_message(self, format, *args):
         logger.info(f"HTTP: {self.address_string()} - {format % args}")
 
 
 def handler(event: dict) -> dict:
-    """Process incoming requests."""
+    """Process incoming requests. Returns AgentCore-compatible JSON response."""
     prompt = (
         event.get("prompt")
         or event.get("input")
@@ -163,17 +179,15 @@ def handler(event: dict) -> dict:
         agent = _get_agent()
         result = agent(prompt)
         return {
-            "statusCode": 200,
-            "body": json.dumps({
-                "response": str(result),
-                "session_id": session_id,
-            }),
+            "response": str(result),
+            "session_id": session_id,
+            "status": "success",
         }
     except Exception as e:
         logger.error(f"Agent execution error: {e}", exc_info=True)
         return {
-            "statusCode": 500,
-            "body": json.dumps({"error": str(e)}),
+            "response": f"Error: {str(e)}",
+            "status": "error",
         }
 
 

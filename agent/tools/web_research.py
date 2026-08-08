@@ -120,29 +120,91 @@ def search_best_practices(topic: str, organization_size: str = "medium") -> str:
 
 
 def _invoke_web_search(query: str) -> str:
-    """Invoke web search through the AgentCore Gateway."""
+    """Invoke web search through the AgentCore MCP Gateway using SigV4-signed HTTP."""
     gateway_id = os.environ.get("GATEWAY_ID")
+    region = os.environ.get("AWS_REGION", "us-east-1")
+    gateway_url = f"https://{gateway_id}.gateway.bedrock-agentcore.{region}.amazonaws.com/mcp"
 
     try:
-        client = boto3.client(
-            "bedrock-agentcore",
-            region_name=os.environ.get("AWS_REGION", "us-east-1"),
+        import botocore.auth
+        import botocore.credentials
+        import botocore.session
+        import urllib.request
+
+        # Get credentials for SigV4 signing
+        session = botocore.session.get_session()
+        credentials = session.get_credentials().get_frozen_credentials()
+
+        # Build MCP tools/call request
+        mcp_request = json.dumps({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {
+                "name": "WebSearch",
+                "arguments": {
+                    "query": query[:200],
+                    "maxResults": 5,
+                },
+            },
+        })
+
+        # Create the HTTP request
+        req = urllib.request.Request(
+            gateway_url,
+            data=mcp_request.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+            },
+            method="POST",
         )
-        response = client.invoke_gateway(
-            gatewayIdentifier=gateway_id,
-            toolName="WebSearch",
-            toolInput=json.dumps({"query": query[:200], "maxResults": 5}),
-        )
-        result = json.loads(response["body"].read().decode("utf-8"))
+
+        # Sign with SigV4
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+
+        aws_req = AWSRequest(method="POST", url=gateway_url, data=mcp_request, headers={"Content-Type": "application/json"})
+        SigV4Auth(credentials, "bedrock-agentcore", region).add_auth(aws_req)
+
+        # Copy signed headers to urllib request
+        for header, value in aws_req.headers.items():
+            req.add_header(header, value)
+
+        # Make the request
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+
+        # Parse MCP response
+        if "result" in result:
+            content = result["result"].get("content", [])
+            if content:
+                # MCP returns content as text blocks
+                text_content = content[0].get("text", "{}") if content else "{}"
+                try:
+                    search_results = json.loads(text_content)
+                    return json.dumps({
+                        "source": "web_search",
+                        "query": query,
+                        "results": search_results.get("results", []),
+                    }, indent=2)
+                except json.JSONDecodeError:
+                    return json.dumps({
+                        "source": "web_search",
+                        "query": query,
+                        "raw_result": text_content[:2000],
+                    }, indent=2)
+
         return json.dumps({
             "source": "web_search",
             "query": query,
-            "results": result.get("results", []),
-        }, indent=2)
+            "results": [],
+            "note": "No results returned from web search.",
+        })
+
     except Exception as e:
         logger.warning(f"Web search failed: {e}")
         return json.dumps({
             "status": "web_search_error",
             "error": str(e),
-            "suggestion": "Web search is not available. Use the SCF data in DynamoDB for control information.",
+            "suggestion": f"Web search failed. For {query}, check nist.gov, hhs.gov, or cisa.gov directly.",
         })

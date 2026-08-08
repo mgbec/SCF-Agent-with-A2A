@@ -45,14 +45,14 @@
 │ for semantic │ │ controls     │ │ across     │ │ Managed web    │
 │ search       │ │ untruncated  │ │ sessions   │ │ search         │
 │              │ │              │ │ (90-day)   │ │ connector      │
-└──────┬───────┘ └──────────────┘ └────────────┘ └────────────────┘
-       │
-       ▼
-┌──────────────┐
-│ S3 Bucket    │
-│ (source data)│
-│ 1,535 .txt   │
-│ files        │
+└──────┬───────┘ └──────────────┘ └────────────┘ └───────┬────────┘
+       │                                                  │
+       ▼                                                  ▼
+┌──────────────┐                                 ┌────────────────┐
+│ S3 Bucket    │                                 │ SigV4-signed   │
+│ (source data)│                                 │ MCP tools/call │
+│ 1,535 .txt   │                                 │ to gateway URL │
+│ files        │                                 └────────────────┘
 └──────────────┘
 ```
 
@@ -90,6 +90,16 @@ User: "Assess our IAC domain maturity"
   1. recall_organization_context → gets current capabilities
   2. get_controls_by_domain("IAC") → DynamoDB returns all IAC controls
   3. Model compares user's state against CMM criteria → scores each control
+```
+
+### Pattern 5: Web Research (Live Internet)
+```
+User: "Any new HIPAA enforcement actions this year?"
+  1. search_regulatory_updates("HIPAA", "enforcement action")
+     → SigV4-signed MCP tools/call to AgentCore Gateway
+     → Gateway routes to Web Search connector
+     → Returns live web results with titles, URLs, dates
+  2. Model synthesizes results into a summary with source citations
 ```
 
 ## Design Principles
@@ -135,27 +145,38 @@ User → AWS IAM (SigV4) → AgentCore Runtime → Agent Container
                                                     │
                                           IAM Role (execution_role)
                                                     │
-                              ┌──────────────────────┼─────────────────────┐
-                              ▼                      ▼                     ▼
-                    bedrock:InvokeModel    dynamodb:GetItem      bedrock:Retrieve
-                    bedrock:Retrieve      dynamodb:Query        (KB)
-                    (model inference)     (control data)
+                    ┌───────────────┬────────────────┼──────────────────────┐
+                    ▼               ▼                ▼                      ▼
+          bedrock:InvokeModel  dynamodb:GetItem  bedrock:Retrieve    bedrock-agentcore:
+          (model inference)    dynamodb:Query    (KB search)         InvokeGateway
+                               (control data)                       (web search)
+                                                                         │
+                                                                         ▼
+                                                              MCP Gateway (SigV4)
+                                                                         │
+                                                                         ▼
+                                                              Web Search Connector
+                                                              (AWS-managed index)
 ```
 
 - All access is IAM-authenticated (no API keys, no OAuth)
 - Agent runtime role has least-privilege per-resource policies
 - DynamoDB is read-only from the agent (no writes)
 - Memory is scoped to the agent's memory ID
+- Web search goes through SigV4-signed MCP calls to the gateway
+- Web search queries stay within AWS infrastructure (never leave to third-party)
 
 ## Known Limitations
 
 | Limitation | Cause | Workaround |
 |-----------|-------|------------|
-| KB has only ~7 controls indexed | S3 Vectors 2048-byte metadata limit | DynamoDB has full data; KB used for semantic hints only |
-| Long responses can timeout | AgentCore ~60s response buffer | System prompt limits to 4000 tokens; progressive delivery |
-| ARM64 container builds are slow | QEMU emulation on x86 | Use pre-downloaded wheels; CI/CD on native ARM64 |
+| KB has only ~7 controls indexed | S3 Vectors 2048-byte metadata limit | DynamoDB has full data; KB provides semantic hints, DynamoDB provides details |
+| Long responses can timeout | AgentCore ~60s response buffer | System prompt limits to 4000 tokens; progressive delivery in conversation |
+| ARM64 container builds are slow | QEMU emulation on x86 | Use pre-downloaded wheels; future: CI/CD on native ARM64 |
 | AgentCore Gateway target provider bug | AWS provider 6.56 issue | `terraform apply -refresh-only` after first apply |
-| Model must use inference profile ID | Bedrock on-demand requirement | Use `us.anthropic.*` not `anthropic.*` |
+| Model must use inference profile ID | Bedrock on-demand requirement | Use `us.anthropic.*` not `anthropic.*`; run preflight.py to validate |
+| Web Search connector requires console setup | CLI doesn't support connector targets | Add via AWS Console → Gateway → Add Target → Web Search |
+| Web search returns errors if gateway not configured | Connector not added | Falls back gracefully with reference URLs to authoritative sources |
 
 ## Adding New Capabilities
 

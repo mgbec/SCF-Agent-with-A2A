@@ -12,19 +12,19 @@ gap analysis, and remediation guidance.
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  ┌───────────────┐   ┌───────────────┐   ┌──────────────────┐   │
-│  │ AgentCore     │   │  Bedrock      │   │  AgentCore       │   │
-│  │ Runtime       │◄──│  Knowledge    │   │  Memory          │   │
-│  │ (Agent Code)  │   │  Base (SCF)   │   │  (Sessions)      │   │
+│  │ AgentCore     │   │  Bedrock KB   │   │   DynamoDB       │   │
+│  │ Runtime       │──▶│  (S3 Vectors) │   │   (Full Data)    │   │
+│  │ (Agent Code)  │   │  Discovery    │   │   1,534 controls │   │
 │  └──────┬────────┘   └───────────────┘   └──────────────────┘   │
 │         │                                                         │
 │  ┌──────┴────────┐   ┌───────────────┐   ┌──────────────────┐   │
-│  │ MCP Gateway   │   │  Web Search   │   │  Bedrock FM      │   │
-│  │ (IAM Auth)    │──►│  Connector    │   │  (Claude)        │   │
-│  └───────────────┘   │  (Live Web)   │   └──────────────────┘   │
-│                       └───────────────┘                           │
+│  │ MCP Gateway   │   │  Web Search   │   │  AgentCore       │   │
+│  │ (SigV4 Auth)  │──▶│  Connector    │   │  Memory          │   │
+│  └───────────────┘   │  (Live Web)   │   │  (Cross-Session) │   │
+│                       └───────────────┘   └──────────────────┘   │
 │  ┌───────────────┐   ┌───────────────┐   ┌──────────────────┐   │
 │  │ HTTP Gateway  │   │  S3 Bucket    │   │  Auto-Updater    │   │
-│  │ (Agent Route) │   │  (SCF JSON)   │   │  (Lambda+EB)     │   │
+│  │ (Agent Route) │   │  (Source Text) │   │  (Lambda+EB)     │   │
 │  └───────────────┘   └───────────────┘   └──────────────────┘   │
 │                                                                   │
 └──────────────────────────────────────────────────────────────────┘

@@ -19,6 +19,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 
 
 # Configuration
@@ -130,9 +131,12 @@ def interactive_mode():
     """Run in interactive chat mode."""
     print("SCF Compliance Agent - Interactive Mode")
     print("Type 'quit' or 'exit' to stop. Type 'clear' for new session.")
+    print("Type 'save' to save the last response to a file.")
     print("=" * 60)
 
     session_id = "cli-interactive"
+    last_response = ""
+
     while True:
         try:
             prompt = input("\n📋 You: ").strip()
@@ -147,12 +151,27 @@ def interactive_mode():
             break
         if prompt.lower() == "clear":
             session_id = f"cli-{os.urandom(4).hex()}"
+            last_response = ""
             print("[Session cleared]")
+            continue
+        if prompt.lower() in ("save", "save report", "export"):
+            if last_response:
+                filename = f"scf-report-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write(last_response)
+                print(f"📄 Saved to: {filename}")
+            else:
+                print("[Nothing to save yet]")
             continue
 
         print("\n🔍 Thinking...\n")
         response = invoke(prompt, session_id)
+        last_response = response
         print(f"🤖 Agent:\n{response}")
+
+        # Auto-prompt to save if response looks like a report
+        if any(marker in response for marker in ["## ", "| SCF", "| Control", "### "]):
+            print(f"\n💡 Type 'save' to export this as a markdown file.")
 
 
 def main():

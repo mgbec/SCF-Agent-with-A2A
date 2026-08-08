@@ -143,7 +143,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format, *args):
-        logger.debug(f"{self.address_string()} - {format % args}")
+        logger.info(f"HTTP: {self.address_string()} - {format % args}")
 
 
 def handler(event: dict) -> dict:

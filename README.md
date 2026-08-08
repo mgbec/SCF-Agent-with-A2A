@@ -48,13 +48,16 @@ gap analysis, and remediation guidance.
 
 | Source | Role | When Used |
 |--------|------|-----------|
-| Bedrock Knowledge Base (S3 Vectors) | Fast vector retrieval of SCF controls | Every query — agent searches for relevant controls |
-| Bedrock AgentCore Web Search | Supplementary current context | Regulatory updates, CVE intel, breach cases, best practices |
+| Bedrock Knowledge Base (S3 Vectors) | Semantic search to find relevant controls | Discovery — "which controls relate to HIPAA?" |
+| DynamoDB | Full untruncated control data (maturity, all mappings, solutions) | Detail — "give me everything about GOV-01" |
+| AgentCore Memory | Organization context that persists across sessions | Remembering user's org, controls, targets |
+| Bedrock AgentCore Web Search | Live internet for current information | Regulatory updates, CVE intel, breach cases |
 
-The agent uses **Knowledge Base retrieval** (vector search) instead of loading raw files.
-This returns relevant control chunks in milliseconds, eliminating timeout issues for
-complex queries. The model then reasons over the retrieved data to produce gap analyses,
-maturity assessments, evidence checklists, and recommendations — no custom Python logic needed.
+**Two-step data flow:** KB search finds the right control IDs fast → DynamoDB returns complete data for those controls. The model then reasons over the full data to produce gap analyses, maturity assessments, and recommendations.
+
+**Long-term memory:** The agent remembers your organization's profile, implemented controls, and compliance targets across sessions. You never have to repeat yourself.
+
+For architecture details, see [docs/architecture-guidelines.md](docs/architecture-guidelines.md).
 
 ### Auto-Update Pipeline
 
@@ -246,7 +249,9 @@ scf-compliance-agent/
 ├── agent/
 │   ├── main.py                 # Agent entry point (Strands Agents framework)
 │   ├── tools/
-│   │   ├── kb_retrieval.py    # Knowledge Base vector search (primary data access)
+│   │   ├── kb_retrieval.py    # Knowledge Base vector search (discovery)
+│   │   ├── dynamo_lookup.py   # DynamoDB full control data (detail)
+│   │   ├── memory.py          # Long-term organization memory
 │   │   └── web_research.py    # Live web search (regulatory, CVE, breaches)
 │   ├── wheels/                 # Pre-downloaded ARM64 wheels (fast Docker builds)
 │   ├── requirements.txt
@@ -274,14 +279,15 @@ scf-compliance-agent/
 
 | Resource | Type | Purpose |
 |----------|------|---------|
-| S3 Bucket | `aws_s3_bucket` | Stores SCF JSON source data + agent code zip |
-| S3 Vectors Bucket + Index | CLI provisioner | Vector store for KB embeddings (1024-dim, cosine) |
-| Bedrock Knowledge Base | `aws_bedrockagent_knowledge_base` | Vector-indexed SCF controls (S3 Vectors backend) |
-| AgentCore Runtime | `aws_bedrockagentcore_agent_runtime` | Hosts the agent (S3 code deploy, Python 3.13) |
-| AgentCore Memory | `aws_bedrockagentcore_memory` | Persists assessment sessions (90-day TTL) |
-| MCP Gateway | `aws_bedrockagentcore_gateway` | Exposes Web Search connector via MCP |
+| S3 Bucket | `aws_s3_bucket` | Stores SCF text files for KB indexing |
+| S3 Vectors Bucket + Index | CLI provisioner | Vector store for KB embeddings |
+| Bedrock Knowledge Base | `aws_bedrockagent_knowledge_base` | Semantic search over SCF controls |
+| DynamoDB Table | `aws_dynamodb_table` | Full untruncated control data (1,534 items) |
+| AgentCore Runtime | `aws_bedrockagentcore_agent_runtime` | Hosts the agent (container, Python 3.13) |
+| AgentCore Memory | `aws_bedrockagentcore_memory` | Long-term org context (90-day retention) |
+| MCP Gateway | `aws_bedrockagentcore_gateway` | Web Search connector via MCP |
 | HTTP Gateway | `aws_bedrockagentcore_gateway` | Routes traffic to the agent runtime |
-| Web Search Target | CLI provisioner | Bedrock managed web search connector |
+| ECR Repository | `aws_ecr_repository` | Agent container images (ARM64) |
 | Lambda Function | `aws_lambda_function` | Weekly SCF version checker/updater |
 | EventBridge Rule | `aws_cloudwatch_event_rule` | Cron trigger (Mondays 8:00 UTC) |
 | SNS Topic | `aws_sns_topic` | Update notifications to your team |

@@ -39,6 +39,10 @@ def _get_agent():
         get_control_full_details,
         get_controls_by_domain,
     )
+    from tools.memory import (
+        remember_organization_context,
+        recall_organization_context,
+    )
     from tools.web_research import (
         search_regulatory_updates,
         search_vulnerability_intelligence,
@@ -63,6 +67,9 @@ def _get_agent():
             # DynamoDB (full detail retrieval - complete data, no size limits)
             get_control_full_details,
             get_controls_by_domain,
+            # Long-term memory (persists across sessions)
+            remember_organization_context,
+            recall_organization_context,
             # Web research (supplementary - live internet)
             search_regulatory_updates,
             search_vulnerability_intelligence,
@@ -97,12 +104,15 @@ YOUR TOOLS:
 10. search_best_practices - Get current industry implementation guidance
 
 HOW TO HANDLE REQUESTS:
+- FIRST: Call recall_organization_context to check if you already know about this user's org
 - Step 1: Use KB search tools (1-4) to FIND relevant controls quickly
 - Step 2: Use DynamoDB tools (5-6) to GET full details for those specific controls
 - This two-step approach is fast AND complete
 - For gap analysis: search by framework → get full details for matched controls
 - For maturity assessment: search maturity → get full criteria from DynamoDB
 - Never skip step 2 if the user needs maturity criteria or evidence details
+- SAVE: When the user shares org info (size, industry, controls, targets), use
+  remember_organization_context so you remember it next time
 
 NOTE ON DATA: Maturity criteria in KB search results are summarized. Use 
 get_control_full_details for complete SCR-CMM level criteria. For the absolute 

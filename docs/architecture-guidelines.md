@@ -2,58 +2,77 @@
 
 ## System Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      User Interface Layer                             │
-│  ask.py (CLI)  │  generate_report.py  │  Future: Web UI / API        │
-└───────────────────────────┬─────────────────────────────────────────┘
-                            │ AWS IAM Auth (SigV4)
-                            ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                   Amazon Bedrock AgentCore Runtime                    │
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │  Agent (Strands Agents + Claude Sonnet 4.6)                    │ │
-│  │                                                                │ │
-│  │  System Prompt: SCF compliance expert                          │ │
-│  │  Model: us.anthropic.claude-sonnet-4-6 (inference profile)     │ │
-│  └──────────┬────────────────────────────────────────────────────┘ │
-│             │                                                        │
-│  ┌──────────▼────────────────────────────────────────────────────┐ │
-│  │  Tools                                                         │ │
-│  │                                                                │ │
-│  │  DISCOVERY (fast):          DETAIL (complete):                 │ │
-│  │  ├─ search_scf_controls     ├─ get_control_full_details       │ │
-│  │  ├─ search_scf_by_framework ├─ get_controls_by_domain         │ │
-│  │  ├─ get_scf_control_details                                   │ │
-│  │  └─ search_scf_maturity     MEMORY (persistent):              │ │
-│  │                              ├─ remember_organization_context  │ │
-│  │  WEB (live):                 └─ recall_organization_context   │ │
-│  │  ├─ search_regulatory_updates                                 │ │
-│  │  ├─ search_vulnerability_intelligence                         │ │
-│  │  ├─ search_breach_cases                                       │ │
-│  │  └─ search_best_practices                                     │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-└──────────┬──────────────┬──────────────┬───────────────┬────────────┘
-           │              │              │               │
-           ▼              ▼              ▼               ▼
-┌──────────────┐ ┌──────────────┐ ┌────────────┐ ┌────────────────┐
-│ Bedrock KB   │ │  DynamoDB    │ │ AgentCore  │ │ AgentCore      │
-│ (S3 Vectors) │ │              │ │ Memory     │ │ Gateway        │
-│              │ │ Full control │ │            │ │ (Web Search)   │
-│ Trimmed text │ │ data: 1,534  │ │ Org context│ │                │
-│ for semantic │ │ controls     │ │ across     │ │ Managed web    │
-│ search       │ │ untruncated  │ │ sessions   │ │ search         │
-│              │ │              │ │ (90-day)   │ │ connector      │
-└──────┬───────┘ └──────────────┘ └────────────┘ └───────┬────────┘
-       │                                                  │
-       ▼                                                  ▼
-┌──────────────┐                                 ┌────────────────┐
-│ S3 Bucket    │                                 │ SigV4-signed   │
-│ (source data)│                                 │ MCP tools/call │
-│ 1,535 .txt   │                                 │ to gateway URL │
-│ files        │                                 └────────────────┘
-└──────────────┘
+```mermaid
+graph TD
+    subgraph "User Interface"
+        CLI["ask.py --interactive"]
+        Report["generate_report.py"]
+        Future["Future: Web UI"]
+    end
+
+    subgraph "AgentCore Runtime (ARM64 Container)"
+        Agent["🤖 Strands Agent + Claude Sonnet 4.6"]
+        
+        subgraph "Discovery Tools (fast)"
+            T1["search_scf_controls"]
+            T2["search_scf_by_framework"]
+            T3["get_scf_control_details"]
+            T4["search_scf_maturity"]
+        end
+        
+        subgraph "Detail Tools (complete)"
+            T5["get_control_full_details"]
+            T6["get_controls_by_domain"]
+        end
+        
+        subgraph "Memory Tools"
+            T7["remember_organization_context"]
+            T8["recall_organization_context"]
+        end
+        
+        subgraph "Web Tools (live)"
+            T9["search_regulatory_updates"]
+            T10["search_vulnerability_intelligence"]
+            T11["search_breach_cases"]
+            T12["search_best_practices"]
+        end
+    end
+
+    subgraph "Data Layer"
+        KB["📚 Bedrock KB - S3 Vectors<br/>Trimmed text for semantic search"]
+        DDB["🗄️ DynamoDB<br/>Full control data - 1,534 items"]
+        MemStore["🧠 AgentCore Memory<br/>Org context - 90 day retention"]
+        GW["🌐 MCP Gateway + Web Search Connector"]
+    end
+
+    subgraph "Storage & Updates"
+        S3["S3 Bucket - 1,535 .txt files"]
+        Updater["⏰ Lambda + EventBridge<br/>Weekly SCF version check"]
+    end
+
+    CLI -->|"SigV4"| Agent
+    Report -->|"SigV4"| Agent
+    
+    Agent --> T1 & T2 & T3 & T4
+    Agent --> T5 & T6
+    Agent --> T7 & T8
+    Agent --> T9 & T10 & T11 & T12
+    
+    T1 & T2 & T3 & T4 --> KB
+    T5 & T6 --> DDB
+    T7 & T8 --> MemStore
+    T9 & T10 & T11 & T12 -->|"SigV4 MCP"| GW
+    
+    KB --> S3
+    Updater --> S3
+    Updater --> DDB
+
+    style Agent fill:#ff9900,color:#fff
+    style KB fill:#232f3e,color:#fff
+    style DDB fill:#232f3e,color:#fff
+    style MemStore fill:#232f3e,color:#fff
+    style GW fill:#147b3b,color:#fff
+    style Updater fill:#8c4fff,color:#fff
 ```
 
 ## Data Flow Patterns
@@ -140,23 +159,19 @@ User: "Any new HIPAA enforcement actions this year?"
 
 ## Security Model
 
-```
-User → AWS IAM (SigV4) → AgentCore Runtime → Agent Container
-                                                    │
-                                          IAM Role (execution_role)
-                                                    │
-                    ┌───────────────┬────────────────┼──────────────────────┐
-                    ▼               ▼                ▼                      ▼
-          bedrock:InvokeModel  dynamodb:GetItem  bedrock:Retrieve    bedrock-agentcore:
-          (model inference)    dynamodb:Query    (KB search)         InvokeGateway
-                               (control data)                       (web search)
-                                                                         │
-                                                                         ▼
-                                                              MCP Gateway (SigV4)
-                                                                         │
-                                                                         ▼
-                                                              Web Search Connector
-                                                              (AWS-managed index)
+```mermaid
+graph LR
+    User["User"] -->|"AWS IAM SigV4"| Runtime["AgentCore Runtime"]
+    Runtime -->|"execution_role"| Role["IAM Role"]
+    
+    Role -->|"bedrock:InvokeModel"| Model["Claude Sonnet 4.6"]
+    Role -->|"dynamodb:GetItem/Query"| DDB["DynamoDB<br/>(read-only)"]
+    Role -->|"bedrock:Retrieve"| KB["Knowledge Base"]
+    Role -->|"bedrock-agentcore:InvokeGateway"| GW["MCP Gateway"]
+    GW -->|"SigV4 MCP"| WS["Web Search<br/>(stays within AWS)"]
+
+    style Runtime fill:#ff9900,color:#fff
+    style Role fill:#dd3522,color:#fff
 ```
 
 - All access is IAM-authenticated (no API keys, no OAuth)

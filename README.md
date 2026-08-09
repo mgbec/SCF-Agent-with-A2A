@@ -6,28 +6,28 @@ gap analysis, and remediation guidance.
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                    SCF Compliance Agent                            │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌───────────────┐   ┌───────────────┐   ┌──────────────────┐   │
-│  │ AgentCore     │   │  Bedrock KB   │   │   DynamoDB       │   │
-│  │ Runtime       │──▶│  (S3 Vectors) │   │   (Full Data)    │   │
-│  │ (Agent Code)  │   │  Discovery    │   │   1,534 controls │   │
-│  └──────┬────────┘   └───────────────┘   └──────────────────┘   │
-│         │                                                         │
-│  ┌──────┴────────┐   ┌───────────────┐   ┌──────────────────┐   │
-│  │ MCP Gateway   │   │  Web Search   │   │  AgentCore       │   │
-│  │ (SigV4 Auth)  │──▶│  Connector    │   │  Memory          │   │
-│  └───────────────┘   │  (Live Web)   │   │  (Cross-Session) │   │
-│                       └───────────────┘   └──────────────────┘   │
-│  ┌───────────────┐   ┌───────────────┐   ┌──────────────────┐   │
-│  │ HTTP Gateway  │   │  S3 Bucket    │   │  Auto-Updater    │   │
-│  │ (Agent Route) │   │  (Source Text) │   │  (Lambda+EB)     │   │
-│  └───────────────┘   └───────────────┘   └──────────────────┘   │
-│                                                                   │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    User["👤 User (CLI / ask.py)"] -->|"AWS IAM SigV4"| Runtime["AgentCore Runtime<br/>Strands Agent + Claude Sonnet 4.6"]
+    
+    Runtime -->|"1. Discovery"| KB["📚 Bedrock KB<br/>S3 Vectors<br/>Semantic Search"]
+    Runtime -->|"2. Full Details"| DDB["🗄️ DynamoDB<br/>1,534 Controls<br/>Untruncated"]
+    Runtime -->|"3. Remember/Recall"| Memory["🧠 AgentCore Memory<br/>Org Context<br/>90-day retention"]
+    Runtime -->|"4. Web Research"| Gateway["🌐 MCP Gateway<br/>SigV4 Signed"]
+    
+    Gateway --> WebSearch["Web Search Connector<br/>AWS Managed Index"]
+    KB --> S3["S3 Bucket<br/>1,535 .txt files"]
+    
+    Updater["⏰ Auto-Updater<br/>Lambda + EventBridge<br/>Weekly check"] -->|"New SCF version"| S3
+    Updater -->|"Reload"| DDB
+
+    style Runtime fill:#ff9900,color:#fff
+    style KB fill:#232f3e,color:#fff
+    style DDB fill:#232f3e,color:#fff
+    style Memory fill:#232f3e,color:#fff
+    style Gateway fill:#232f3e,color:#fff
+    style WebSearch fill:#147b3b,color:#fff
+    style Updater fill:#8c4fff,color:#fff
 ```
 
 ## What It Does

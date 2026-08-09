@@ -58,12 +58,14 @@ def _get_agent():
         "region_name": os.environ.get("AWS_REGION", "us-east-1"),
     }
 
-    # Add guardrail if configured
+    # Add guardrail as additional request field
     if guardrail_id and guardrail_version:
-        model_kwargs["guardrail_config"] = {
-            "guardrailIdentifier": guardrail_id,
-            "guardrailVersion": guardrail_version,
-            "trace": "enabled",
+        model_kwargs["additional_request_fields"] = {
+            "guardrailConfig": {
+                "guardrailIdentifier": guardrail_id,
+                "guardrailVersion": guardrail_version,
+                "trace": "enabled",
+            }
         }
 
     model = BedrockModel(**model_kwargs)

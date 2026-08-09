@@ -101,9 +101,10 @@ cmd /c "aws ecr get-login-password --region us-east-1 | docker login --username 
 # Build and push (uses pre-downloaded ARM64 wheels for speed)
 cmd /c "docker buildx build --platform linux/arm64 -t <ecr-url>:latest --push ."
 
-# 4. Upload SCF data to S3 and sync the Knowledge Base
+# 4. Load SCF data into DynamoDB and S3
 cd ..\scripts
-python upload_scf_data.py
+python load_dynamodb.py
+python reindex_kb.py
 
 # 5. Run preflight again to confirm everything works
 python preflight.py
@@ -263,7 +264,9 @@ scf-compliance-agent/
 │   ├── ask.py                  # CLI query tool (interactive + single-shot)
 │   ├── generate_report.py      # Multi-step report generator
 │   ├── preflight.py            # Pre-deployment validation
-│   ├── upload_scf_data.py      # Initial data load to S3
+│   ├── load_dynamodb.py        # Load full SCF data into DynamoDB
+│   ├── reindex_kb.py           # Reload trimmed text into KB (S3 Vectors)
+│   ├── upload_scf_data.py      # Legacy: initial S3 upload (use load_dynamodb.py instead)
 │   └── test_agent.py           # Integration test suite
 └── sample-project/             # Fictional company for demos (Acme HealthTech)
     ├── organization-profile.json

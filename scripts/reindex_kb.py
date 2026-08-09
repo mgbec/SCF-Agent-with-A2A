@@ -1,6 +1,7 @@
 """
 Re-index the Knowledge Base with trimmed text control files.
 
+This is not necessary at the moment unless we switch to OpenSearch, right now DynamoDB is covering things
 S3 Vectors has a 2048-byte metadata limit per record. The full SCF control
 text (especially maturity criteria) exceeds this. We trim maturity criteria
 to 200 chars per level and solutions to 200 chars per size tier.

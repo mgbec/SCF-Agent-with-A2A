@@ -50,10 +50,23 @@ def _get_agent():
         search_best_practices,
     )
 
-    model = BedrockModel(
-        model_id=os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"),
-        region_name=os.environ.get("AWS_REGION", "us-east-1"),
-    )
+    guardrail_id = os.environ.get("GUARDRAIL_ID")
+    guardrail_version = os.environ.get("GUARDRAIL_VERSION")
+
+    model_kwargs = {
+        "model_id": os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"),
+        "region_name": os.environ.get("AWS_REGION", "us-east-1"),
+    }
+
+    # Add guardrail if configured
+    if guardrail_id and guardrail_version:
+        model_kwargs["guardrail_config"] = {
+            "guardrailIdentifier": guardrail_id,
+            "guardrailVersion": guardrail_version,
+            "trace": "enabled",
+        }
+
+    model = BedrockModel(**model_kwargs)
 
     _agent = Agent(
         model=model,

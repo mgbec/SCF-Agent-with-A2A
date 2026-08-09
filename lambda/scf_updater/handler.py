@@ -28,6 +28,7 @@ SCF_DATA_BUCKET = os.environ["SCF_DATA_BUCKET"]
 KNOWLEDGE_BASE_ID = os.environ["KNOWLEDGE_BASE_ID"]
 SNS_TOPIC_ARN = os.environ["SNS_TOPIC_ARN"]
 VERSION_PARAM = os.environ["VERSION_PARAM"]
+DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE", "")
 SCF_DOWNLOAD_URL = os.environ.get(
     "SCF_DOWNLOAD_URL",
     "https://content.securecontrolsframework.com/json/scf-full.json",
@@ -160,6 +161,43 @@ def trigger_kb_sync() -> None:
         raise
 
 
+def reload_dynamodb(scf_data: dict) -> None:
+    """Reload all controls into DynamoDB with full untruncated data."""
+    if not DYNAMODB_TABLE:
+        logger.warning("DYNAMODB_TABLE not set, skipping DynamoDB reload")
+        return
+
+    logger.info(f"Reloading DynamoDB table: {DYNAMODB_TABLE}")
+    dynamodb = boto3.resource("dynamodb")
+    table = dynamodb.Table(DYNAMODB_TABLE)
+
+    count = 0
+    with table.batch_writer() as batch:
+        for ctrl in scf_data["controls"]:
+            item = {
+                "scf_id": ctrl["scf_id"],
+                "domain_id": ctrl["scf_id"].split("-")[0],
+                "scf_domain": ctrl["scf_domain"],
+                "scf_control_name": ctrl["scf_control_name"],
+                "description": ctrl["description"],
+                "control_question": ctrl["control_question"],
+                "conformity_cadence": ctrl["conformity_cadence"],
+                "erl_reference": ctrl.get("erl_reference", "N/A"),
+                "weight": ctrl["weight"],
+                "pptdf_applicability": ctrl["pptdf_applicability"],
+                "nist_csf_function_grouping": ctrl["nist_csf_function_grouping"],
+                "cmm_levels": ctrl.get("cmm_levels", {}),
+                "mappings": ctrl.get("mappings", {}),
+                "extra": ctrl.get("extra", {}),
+            }
+            # DynamoDB doesn't allow empty strings
+            item = {k: v for k, v in item.items() if v != ""}
+            batch.put_item(Item=item)
+            count += 1
+
+    logger.info(f"DynamoDB reload complete: {count} controls loaded")
+
+
 def send_notification(subject: str, message: str) -> None:
     """Send SNS notification."""
     sns.publish(
@@ -210,6 +248,9 @@ def lambda_handler(event, context):
         # Upload to S3
         upload_to_s3(scf_data)
 
+        # Reload DynamoDB with full control data
+        reload_dynamodb(scf_data)
+
         # Trigger Knowledge Base re-ingestion
         trigger_kb_sync()
 
@@ -230,6 +271,7 @@ def lambda_handler(event, context):
                 f"- Versioned copy at s3://{SCF_DATA_BUCKET}/versions/scf-full-{new_version}.json\n"
                 f"- Per-domain files updated in s3://{SCF_DATA_BUCKET}/domains/\n"
                 f"- Framework mapping index rebuilt\n"
+                f"- DynamoDB table reloaded with all controls\n"
                 f"- Bedrock Knowledge Base re-ingestion triggered\n\n"
                 f"Action required:\n"
                 f"- Review the SCF errata/changelog for breaking changes\n"

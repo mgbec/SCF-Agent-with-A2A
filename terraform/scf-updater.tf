@@ -88,6 +88,14 @@ resource "aws_iam_role_policy" "scf_updater" {
       {
         Effect = "Allow"
         Action = [
+          "dynamodb:PutItem",
+          "dynamodb:BatchWriteItem"
+        ]
+        Resource = aws_dynamodb_table.scf_controls.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
@@ -121,6 +129,7 @@ resource "aws_lambda_function" "scf_updater" {
     variables = {
       SCF_DATA_BUCKET   = aws_s3_bucket.scf_data.id
       KNOWLEDGE_BASE_ID = aws_bedrockagent_knowledge_base.scf.id
+      DYNAMODB_TABLE    = aws_dynamodb_table.scf_controls.name
       SNS_TOPIC_ARN     = aws_sns_topic.scf_updates.arn
       VERSION_PARAM     = "/${local.name_prefix}/scf-current-version"
       SCF_DOWNLOAD_URL  = "https://content.securecontrolsframework.com/json/scf-full.json"

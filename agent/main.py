@@ -52,23 +52,13 @@ def _get_agent():
 
     guardrail_id = os.environ.get("GUARDRAIL_ID")
     guardrail_version = os.environ.get("GUARDRAIL_VERSION")
+    if guardrail_id:
+        logger.info(f"Guardrail configured: {guardrail_id} v{guardrail_version} (platform-level enforcement)")
 
-    model_kwargs = {
-        "model_id": os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"),
-        "region_name": os.environ.get("AWS_REGION", "us-east-1"),
-    }
-
-    # Add guardrail as additional request field
-    if guardrail_id and guardrail_version:
-        model_kwargs["additional_request_fields"] = {
-            "guardrailConfig": {
-                "guardrailIdentifier": guardrail_id,
-                "guardrailVersion": guardrail_version,
-                "trace": "enabled",
-            }
-        }
-
-    model = BedrockModel(**model_kwargs)
+    model = BedrockModel(
+        model_id=os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"),
+        region_name=os.environ.get("AWS_REGION", "us-east-1"),
+    )
 
     _agent = Agent(
         model=model,
@@ -249,7 +239,7 @@ def _validate_input(prompt: str) -> str:
     if len(prompt.strip()) == 0:
         return "Empty input. Please provide a question about SCF compliance."
 
-    # Basic injection detection - catch obvious attempts
+    # Basic injection detection
     injection_patterns = [
         "ignore previous instructions",
         "ignore all previous",
@@ -265,6 +255,32 @@ def _validate_input(prompt: str) -> str:
         if pattern in prompt_lower:
             logger.warning(f"Potential injection attempt detected: '{pattern}'")
             return "I can only help with cybersecurity compliance topics. Please rephrase your question."
+
+    # Off-topic detection - check if the prompt has NO compliance-related keywords
+    compliance_keywords = [
+        "scf", "control", "compliance", "security", "risk", "audit", "framework",
+        "hipaa", "nist", "iso", "pci", "soc", "gdpr", "nis2", "dora", "cmmc",
+        "maturity", "gap", "assessment", "policy", "governance", "encryption",
+        "access", "incident", "vulnerability", "patch", "privacy", "data",
+        "network", "identity", "authentication", "monitoring", "continuity",
+        "vendor", "third-party", "supply chain", "quantum", "ai", "cloud",
+        "endpoint", "malware", "phishing", "training", "awareness", "evidence",
+        "remediation", "compensating", "domain", "implement", "requirement",
+    ]
+    has_compliance_keyword = any(kw in prompt_lower for kw in compliance_keywords)
+
+    # If no compliance keywords AND it's clearly off-topic
+    off_topic_patterns = [
+        "poem", "story", "joke", "recipe", "weather", "sports",
+        "movie", "song", "game", "homework", "essay about",
+        "write me a", "tell me a joke", "what's the score",
+    ]
+    is_off_topic = any(pattern in prompt_lower for pattern in off_topic_patterns)
+
+    if is_off_topic and not has_compliance_keyword:
+        return ("I'm the SCF Compliance Assessment Agent — I help with cybersecurity governance, "
+                "risk management, and compliance. I can help with gap analysis, maturity assessments, "
+                "framework mapping, and evidence requirements. How can I help with your compliance needs?")
 
     return ""
 

@@ -348,27 +348,24 @@ resource "aws_iam_role_policy" "agentcore_bedrock" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "ModelInvocation"
         Effect = "Allow"
         Action = [
           "bedrock:InvokeModel",
           "bedrock:InvokeModelWithResponseStream"
         ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "bedrock:Retrieve",
-          "bedrock:RetrieveAndGenerate"
+        Resource = [
+          "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_model_id}",
+          "arn:aws:bedrock:${local.region}::foundation-model/*"
         ]
-        Resource = aws_bedrockagent_knowledge_base.scf.arn
       },
       {
+        Sid    = "KnowledgeBaseRetrieval"
         Effect = "Allow"
         Action = [
           "bedrock:Retrieve"
         ]
-        Resource = "arn:aws:bedrock:${local.region}:${local.account_id}:knowledge-base/${aws_bedrockagent_knowledge_base.scf.id}"
+        Resource = aws_bedrockagent_knowledge_base.scf.arn
       }
     ]
   })
@@ -430,7 +427,7 @@ resource "aws_iam_role_policy" "agentcore_logs" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:${local.region}:${local.account_id}:*"
+        Resource = "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/bedrock-agentcore/runtimes/*"
       }
     ]
   })

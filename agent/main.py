@@ -195,6 +195,15 @@ def handler(event: dict) -> dict:
     )
     session_id = event.get("session_id", "default")
 
+    # Input validation
+    validation_error = _validate_input(prompt)
+    if validation_error:
+        logger.warning(f"Input rejected: {validation_error}")
+        return {
+            "response": validation_error,
+            "status": "rejected",
+        }
+
     logger.info(f"Processing request for session: {session_id}, prompt length: {len(prompt)}")
 
     try:
@@ -211,6 +220,38 @@ def handler(event: dict) -> dict:
             "response": f"Error: {str(e)}",
             "status": "error",
         }
+
+
+def _validate_input(prompt: str) -> str:
+    """
+    Validate user input before sending to the model.
+    Returns error message if invalid, empty string if OK.
+    """
+    # Length limits
+    if len(prompt) > 10000:
+        return "Input too long. Please keep your question under 10,000 characters."
+
+    if len(prompt.strip()) == 0:
+        return "Empty input. Please provide a question about SCF compliance."
+
+    # Basic injection detection - catch obvious attempts
+    injection_patterns = [
+        "ignore previous instructions",
+        "ignore all previous",
+        "disregard your instructions",
+        "you are now",
+        "new instructions:",
+        "system prompt:",
+        "forget everything",
+        "override your",
+    ]
+    prompt_lower = prompt.lower()
+    for pattern in injection_patterns:
+        if pattern in prompt_lower:
+            logger.warning(f"Potential injection attempt detected: '{pattern}'")
+            return "I can only help with cybersecurity compliance topics. Please rephrase your question."
+
+    return ""
 
 
 if __name__ == "__main__":

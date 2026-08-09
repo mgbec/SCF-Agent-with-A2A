@@ -56,3 +56,8 @@ output "dynamodb_table_name" {
   description = "DynamoDB table name for full SCF control data"
   value       = aws_dynamodb_table.scf_controls.name
 }
+
+output "guardrail_id" {
+  description = "Bedrock Guardrail ID"
+  value       = aws_bedrock_guardrail.scf_agent.guardrail_id
+}

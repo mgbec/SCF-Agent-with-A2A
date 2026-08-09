@@ -356,7 +356,7 @@ resource "aws_iam_role_policy" "agentcore_bedrock" {
         ]
         Resource = [
           "arn:aws:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_model_id}",
-          "arn:aws:bedrock:${local.region}::foundation-model/*"
+          "arn:aws:bedrock:*::foundation-model/anthropic.*"
         ]
       },
       {

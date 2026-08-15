@@ -110,12 +110,39 @@ cd ..\scripts
 python load_dynamodb.py
 python reindex_kb.py
 
-# 5. Run preflight again to confirm everything works
+# 5. (Optional) Load sample questionnaire answers
+python ingest_answers.py --file "..\sample-project\sample-questionnaire-financial.csv" --framework "VENDOR_ASSESSMENT" --approved-by "Your Name"
+
+# 6. Run preflight again to confirm everything works
 python preflight.py
 
-# 6. Query the agent
+# 7. Query the agent
 python ask.py --interactive
 ```
+
+## Loading Questionnaire Answers
+
+Import your historical questionnaire responses so the agent can reuse them:
+
+```powershell
+# From a CSV file (columns: question, answer, category)
+python scripts/ingest_answers.py --file responses.csv --framework SIG --approved-by "Your Name"
+
+# From an Excel file (auto-detects question/answer columns)
+python scripts/ingest_answers.py --file soc2_responses.xlsx --framework SOC2
+
+# From a directory of files
+python scripts/ingest_answers.py --dir ./questionnaires/ --framework vendor_questionnaire
+
+# Upload a PDF for OCR extraction (auto-triggers Textract pipeline)
+aws s3 cp questionnaire.pdf s3://scf-agent-questionnaire-uploads-339712707840-us-east-1/ --region us-east-1
+```
+
+PDFs and images uploaded to S3 are automatically processed by the Textract OCR pipeline.
+Extracted Q&A pairs are stored as `DRAFT` status and can be approved before use.
+
+A sample financial services questionnaire is included at
+`sample-project/sample-questionnaire-financial.csv` for testing.
 
 ## Querying the Agent
 
@@ -271,6 +298,7 @@ scf-compliance-agent/
 │   ├── tools/
 │   │   ├── kb_retrieval.py    # Knowledge Base vector search (discovery)
 │   │   ├── dynamo_lookup.py   # DynamoDB full control data (detail)
+│   │   ├── answers_lookup.py  # Historical questionnaire answers
 │   │   ├── memory.py          # Long-term organization memory
 │   │   └── web_research.py    # Live web search (regulatory, CVE, breaches)
 │   ├── wheels/                 # Pre-downloaded ARM64 wheels (fast Docker builds)
@@ -283,6 +311,7 @@ scf-compliance-agent/
 │   ├── ask.py                  # CLI query tool (interactive + single-shot)
 │   ├── generate_report.py      # Multi-step report generator
 │   ├── preflight.py            # Pre-deployment validation
+│   ├── ingest_answers.py       # Import questionnaire answers (CSV/XLSX/JSON)
 │   ├── load_dynamodb.py        # Load full SCF data into DynamoDB
 │   ├── reindex_kb.py           # Reload trimmed text into KB (S3 Vectors)
 │   ├── upload_scf_data.py      # Legacy: initial S3 upload (use load_dynamodb.py instead)

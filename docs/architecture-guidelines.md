@@ -121,6 +121,25 @@ User: "Any new HIPAA enforcement actions this year?"
   2. Model synthesizes results into a summary with source citations
 ```
 
+### Pattern 6: Questionnaire Answer Lookup
+```
+User: "How do we answer the SIG question about encryption at rest?"
+  1. search_approved_answers("encryption at rest", framework="SIG")
+     → DynamoDB query on approved answers table
+     → Returns matching historical responses with source citations
+  2. If match found: present the approved answer with metadata
+  3. If no match: search SCF controls for CRY-05, draft a new answer
+```
+
+### Pattern 7: Questionnaire Ingestion
+```
+Admin runs: python ingest_answers.py --file sig_2025.xlsx --framework SIG
+  1. Parser reads XLSX (or CSV/JSON)
+  2. Extracts Q&A pairs with category metadata
+  3. Writes to DynamoDB as approved answers
+  4. Future: Textract OCR for scanned PDFs
+```
+
 ## Design Principles
 
 ### 1. Retrieval First, Never Batch Load

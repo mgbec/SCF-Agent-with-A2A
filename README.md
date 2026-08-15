@@ -8,54 +8,58 @@ gap analysis, and remediation guidance.
 
 ```mermaid
 graph TD
-    User["👤 User (CLI / ask.py)"] -->|"AWS IAM SigV4"| Runtime["AgentCore Runtime<br/>Strands Agent + Claude Sonnet 4.6"]
+    User["👤 User (CLI / Web UI)"] -->|"AWS IAM SigV4"| Runtime["AgentCore Runtime<br/>Strands Agent + Claude Sonnet 4.6"]
     
     Runtime -->|"1. Discovery"| KB["📚 Bedrock KB<br/>S3 Vectors<br/>Semantic Search"]
-    Runtime -->|"2. Full Details"| DDB["🗄️ DynamoDB<br/>1,534 Controls<br/>Untruncated"]
-    Runtime -->|"3. Remember/Recall"| Memory["🧠 AgentCore Memory<br/>Org Context<br/>90-day retention"]
-    Runtime -->|"4. Web Research"| Gateway["🌐 MCP Gateway<br/>SigV4 Signed"]
+    Runtime -->|"2. Full Details"| DDB["🗄️ DynamoDB<br/>SCF Controls<br/>1,534 items"]
+    Runtime -->|"3. Past Answers"| Answers["📋 DynamoDB<br/>Approved Answers<br/>Questionnaire History"]
+    Runtime -->|"4. Remember/Recall"| Memory["🧠 AgentCore Memory<br/>Org Context<br/>90-day retention"]
+    Runtime -->|"5. Web Research"| Gateway["🌐 MCP Gateway<br/>SigV4 Signed"]
     
     Gateway --> WebSearch["Web Search Connector<br/>AWS Managed Index"]
     KB --> S3["S3 Bucket<br/>1,535 .txt files"]
     
+    Ingest["📥 ingest_answers.py<br/>CSV / XLSX / JSON"] --> Answers
     Updater["⏰ Auto-Updater<br/>Lambda + EventBridge<br/>Weekly check"] -->|"New SCF version"| S3
     Updater -->|"Reload"| DDB
 
     style Runtime fill:#ff9900,color:#fff
     style KB fill:#232f3e,color:#fff
     style DDB fill:#232f3e,color:#fff
+    style Answers fill:#232f3e,color:#fff
     style Memory fill:#232f3e,color:#fff
     style Gateway fill:#232f3e,color:#fff
     style WebSearch fill:#147b3b,color:#fff
     style Updater fill:#8c4fff,color:#fff
+    style Ingest fill:#8c4fff,color:#fff
 ```
 
 ## What It Does
 
-1. **Control Lookup** - Query any of 1,534 SCF controls by ID, domain, or keyword
-2. **Framework Mapping** - Map between SCF and 252+ regulations (HIPAA, SOX, PCI DSS, NIS2, etc.)
-3. **Maturity Assessment** - Assess organizational maturity (SCR-CMM Levels 0-5)
-4. **Gap Analysis** - Identify gaps against target frameworks with remediation guidance
-5. **Compliance Scoping** - Filter controls by profile (ESP Level 1/2/3, AI, MA&D)
-6. **Risk & Threat Correlation** - Link controls to risk scenarios and threats
-7. **Web Research** (live internet via Bedrock AgentCore Web Search):
-   - Latest regulatory updates and enforcement actions
-   - Current CVE/vulnerability intelligence (NVD, CISA KEV)
-   - Recent breach cases and outcomes
-   - Industry best practices and implementation guides
+1. **Gap Analysis** - Identify missing controls against any target framework
+2. **Maturity Assessment** - Score against SCR-CMM Levels 0-5
+3. **Framework Mapping** - Map between SCF and 252+ regulations
+4. **Evidence Checklists** - Generate audit-ready evidence requirements
+5. **Compensating Controls** - Recommend alternatives for gaps
+6. **Questionnaire Answers** - Find and reuse historical assessment responses
+7. **Web Research** - Live search for regulatory updates, CVEs, breach cases
+8. **Long-term Memory** - Remembers your organization across sessions
 
 ### Data Source Strategy
 
 | Source | Role | When Used |
 |--------|------|-----------|
-| Bedrock Knowledge Base (S3 Vectors) | Semantic search to find relevant controls | Discovery — "which controls relate to HIPAA?" |
-| DynamoDB | Full untruncated control data (maturity, all mappings, solutions) | Detail — "give me everything about GOV-01" |
-| AgentCore Memory | Organization context that persists across sessions | Remembering user's org, controls, targets |
+| DynamoDB (SCF Controls) | Full untruncated control data (1,534 items) | Detail lookups, maturity criteria, all mappings |
+| DynamoDB (Approved Answers) | Historical questionnaire responses | Answering security questionnaires, reusing past responses |
+| Bedrock Knowledge Base (S3 Vectors) | Semantic search for control discovery | Finding relevant controls by topic |
+| AgentCore Memory | Organization context across sessions | Remembering org profile, controls, targets |
 | Bedrock AgentCore Web Search | Live internet for current information | Regulatory updates, CVE intel, breach cases |
 
-**Two-step data flow:** KB search finds the right control IDs fast → DynamoDB returns complete data for those controls. The model then reasons over the full data to produce gap analyses, maturity assessments, and recommendations.
+**Two-step data flow:** KB search finds the right control IDs fast, DynamoDB returns complete data. The model reasons over the full data to produce analyses and recommendations.
 
-**Long-term memory:** The agent remembers your organization's profile, implemented controls, and compliance targets across sessions. You never have to repeat yourself.
+**Questionnaire workflow:** User asks "how do we answer X?" Agent searches approved answers first, presents historical responses with source citations. If no match, drafts a new answer from SCF controls.
+
+**Long-term memory:** The agent remembers your organization's profile, implemented controls, and compliance targets across sessions.
 
 For architecture details, see [docs/architecture-guidelines.md](docs/architecture-guidelines.md).
 
@@ -234,6 +238,21 @@ Include the assessment questions, evidence to request from vendors, and how to
 tier vendors by risk level.
 ```
 
+### Questionnaire Answers
+```
+How do we answer the SIG question about data encryption at rest?
+```
+
+```
+What did we put for incident response in our last SOC 2 assessment?
+```
+
+```
+I need to fill out a vendor security questionnaire. The question is:
+"Describe your access control and authentication mechanisms."
+What's our standard response?
+```
+
 ## Project Structure
 
 ```
@@ -282,15 +301,18 @@ scf-compliance-agent/
 
 | Resource | Type | Purpose |
 |----------|------|---------|
-| S3 Bucket | `aws_s3_bucket` | Stores SCF text files for KB indexing |
+| S3 Bucket (SCF data) | `aws_s3_bucket` | Stores SCF text files for KB indexing |
+| S3 Bucket (Questionnaires) | `aws_s3_bucket` | Upload bucket for questionnaire documents (future OCR) |
 | S3 Vectors Bucket + Index | CLI provisioner | Vector store for KB embeddings |
 | Bedrock Knowledge Base | `aws_bedrockagent_knowledge_base` | Semantic search over SCF controls |
-| DynamoDB Table | `aws_dynamodb_table` | Full untruncated control data (1,534 items) |
+| DynamoDB (SCF Controls) | `aws_dynamodb_table` | Full untruncated control data (1,534 items) |
+| DynamoDB (Approved Answers) | `aws_dynamodb_table` | Historical questionnaire responses |
 | AgentCore Runtime | `aws_bedrockagentcore_agent_runtime` | Hosts the agent (container, Python 3.13) |
 | AgentCore Memory | `aws_bedrockagentcore_memory` | Long-term org context (90-day retention) |
 | MCP Gateway | `aws_bedrockagentcore_gateway` | Web Search connector via MCP |
 | HTTP Gateway | `aws_bedrockagentcore_gateway` | Routes traffic to the agent runtime |
 | ECR Repository | `aws_ecr_repository` | Agent container images (ARM64) |
+| Bedrock Guardrail | `aws_bedrock_guardrail` | Content filtering + topic enforcement |
 | Lambda Function | `aws_lambda_function` | Weekly SCF version checker/updater |
 | EventBridge Rule | `aws_cloudwatch_event_rule` | Cron trigger (Mondays 8:00 UTC) |
 | SNS Topic | `aws_sns_topic` | Update notifications to your team |

@@ -141,6 +141,21 @@ aws s3 cp questionnaire.pdf s3://scf-agent-questionnaire-uploads-339712707840-us
 PDFs and images uploaded to S3 are automatically processed by the Textract OCR pipeline.
 Extracted Q&A pairs are stored as `DRAFT` status and can be approved before use.
 
+### Audit Trail
+
+Every change to the approved answers database is automatically logged:
+- New answers ingested (who imported, when, from what source)
+- Answer text modified (before/after values, who changed it)
+- Status changes (DRAFT → APPROVED, who approved)
+- Answers deleted (full content preserved in log)
+
+Query history for a specific answer:
+```powershell
+aws dynamodb query --table-name scf-agent-answer-audit-log --index-name answer-history-index --key-condition-expression "answer_id = :id" --expression-attribute-values '{":id":{"S":"<answer-id>"}}' --region us-east-1
+```
+
+Audit logs are retained for 365 days.
+
 A sample financial services questionnaire is included at
 `sample-project/sample-questionnaire-financial.csv` for testing.
 
@@ -336,12 +351,15 @@ scf-compliance-agent/
 | Bedrock Knowledge Base | `aws_bedrockagent_knowledge_base` | Semantic search over SCF controls |
 | DynamoDB (SCF Controls) | `aws_dynamodb_table` | Full untruncated control data (1,534 items) |
 | DynamoDB (Approved Answers) | `aws_dynamodb_table` | Historical questionnaire responses |
+| DynamoDB (Audit Log) | `aws_dynamodb_table` | Change history for all answer modifications |
 | AgentCore Runtime | `aws_bedrockagentcore_agent_runtime` | Hosts the agent (container, Python 3.13) |
 | AgentCore Memory | `aws_bedrockagentcore_memory` | Long-term org context (90-day retention) |
 | MCP Gateway | `aws_bedrockagentcore_gateway` | Web Search connector via MCP |
 | HTTP Gateway | `aws_bedrockagentcore_gateway` | Routes traffic to the agent runtime |
 | ECR Repository | `aws_ecr_repository` | Agent container images (ARM64) |
 | Bedrock Guardrail | `aws_bedrock_guardrail` | Content filtering + topic enforcement |
+| Audit Logger Lambda | `aws_lambda_function` | Captures all answer changes to audit log |
+| Textract Pipeline Lambda | `aws_lambda_function` | OCR extraction from uploaded documents |
 | Lambda Function | `aws_lambda_function` | Weekly SCF version checker/updater |
 | EventBridge Rule | `aws_cloudwatch_event_rule` | Cron trigger (Mondays 8:00 UTC) |
 | SNS Topic | `aws_sns_topic` | Update notifications to your team |

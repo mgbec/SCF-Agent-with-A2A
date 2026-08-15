@@ -137,7 +137,19 @@ Admin runs: python ingest_answers.py --file sig_2025.xlsx --framework SIG
   1. Parser reads XLSX (or CSV/JSON)
   2. Extracts Q&A pairs with category metadata
   3. Writes to DynamoDB as approved answers
-  4. Future: Textract OCR for scanned PDFs
+  4. DynamoDB Stream triggers audit logger
+  5. Audit log records: INSERT, who, when, full content
+  6. Future: Textract OCR for scanned PDFs
+```
+
+### Pattern 8: Answer Audit Trail
+```
+Admin updates an answer's text or status
+  1. DynamoDB Stream captures MODIFY event (old + new image)
+  2. Audit Logger Lambda fires
+  3. Writes audit record: answer_id, timestamp, who, old_value, new_value, fields_changed
+  4. Queryable by answer_id + timestamp via GSI
+  5. 365-day retention for compliance evidence
 ```
 
 ## Design Principles

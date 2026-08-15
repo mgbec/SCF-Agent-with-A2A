@@ -78,13 +78,30 @@ def search_approved_answers(query: str, category: str = "", framework: str = "",
                 Limit=limit,
             )
         else:
-            # Scan with filter (less efficient but works for text search)
-            response = table.scan(
-                FilterExpression=Attr("question_text").contains(query.lower()) | 
-                                 Attr("answer_text").contains(query.lower()) |
-                                 Attr("tags").contains(query.lower()),
-                Limit=limit,
-            )
+            # Scan with filter — search for keywords in question and answer text
+            # Split query into keywords for better matching
+            keywords = [w.lower() for w in query.split() if len(w) > 3]
+            
+            # Use the most distinctive keyword for the DynamoDB filter
+            # (DynamoDB contains is case-sensitive, so we scan and filter in Python)
+            response = table.scan(Limit=100)
+            
+            items = []
+            for item in response.get("Items", []):
+                q_text = (item.get("question_text", "") or "").lower()
+                a_text = (item.get("answer_text", "") or "").lower()
+                tags = (item.get("tags", "") or "").lower()
+                searchable = f"{q_text} {a_text} {tags}"
+                
+                # Score by keyword matches
+                score = sum(1 for kw in keywords if kw in searchable)
+                if score >= max(1, len(keywords) // 3):  # At least 1/3 of keywords match
+                    item["_score"] = score
+                    items.append(item)
+            
+            # Sort by relevance score
+            items.sort(key=lambda x: x.get("_score", 0), reverse=True)
+            response = {"Items": items[:limit]}
 
         items = response.get("Items", [])
 

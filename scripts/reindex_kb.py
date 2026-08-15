@@ -20,7 +20,9 @@ WHAT'S KEPT IN FULL:
 For full SCR-CMM maturity criteria, refer to:
 https://securecontrolsframework.com/free-content/scf-download
 """
-
+Lambda: scf-agent-scf-updater (Python 3.13, 5-min timeout)
+Schedule: Every Monday at 8:00 UTC (ENABLED)
+SSM Parameter: Tracks current version (2026.2)
 import json
 import os
 

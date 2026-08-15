@@ -2,10 +2,9 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Copy pre-downloaded ARM64 wheels and install from local files (no network, no emulation overhead)
-COPY wheels/ /tmp/wheels/
-RUN pip install --no-cache-dir --no-index --find-links=/tmp/wheels/ strands-agents boto3 \
-    && rm -rf /tmp/wheels/
+# Install dependencies using only pre-built wheels (no compilation)
+COPY requirements.txt .
+RUN pip install --no-cache-dir --only-binary=:all: -r requirements.txt
 
 # Copy agent code
 COPY main.py .

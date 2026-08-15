@@ -472,6 +472,7 @@ resource "aws_bedrockagentcore_agent_runtime" "compliance_agent" {
     MEMORY_ID         = aws_bedrockagentcore_memory.compliance.id
     GATEWAY_ID        = aws_bedrockagentcore_gateway.compliance.gateway_id
     DYNAMODB_TABLE    = aws_dynamodb_table.scf_controls.name
+    ANSWERS_TABLE     = aws_dynamodb_table.approved_answers.name
     BEDROCK_MODEL_ID  = var.bedrock_model_id
     AWS_REGION        = local.region
     LOG_LEVEL         = var.log_level

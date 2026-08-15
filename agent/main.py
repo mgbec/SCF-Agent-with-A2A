@@ -43,6 +43,11 @@ def _get_agent():
         remember_organization_context,
         recall_organization_context,
     )
+    from tools.answers_lookup import (
+        search_approved_answers,
+        get_answer_by_id,
+        list_answer_categories,
+    )
     from tools.web_research import (
         search_regulatory_updates,
         search_vulnerability_intelligence,
@@ -67,6 +72,10 @@ def _get_agent():
             # DynamoDB (full detail retrieval - complete data, no size limits)
             get_control_full_details,
             get_controls_by_domain,
+            # Approved answers (historical questionnaire responses)
+            search_approved_answers,
+            get_answer_by_id,
+            list_answer_categories,
             # Long-term memory (persists across sessions)
             remember_organization_context,
             recall_organization_context,
@@ -98,21 +107,28 @@ YOUR TOOLS:
 4. search_scf_maturity - Find maturity criteria for a domain
 5. get_control_full_details - Get COMPLETE data from DynamoDB (full maturity criteria, all mappings)
 6. get_controls_by_domain - Get all controls in a domain from DynamoDB
-7. search_regulatory_updates - Search the web for latest regulatory news
-8. search_vulnerability_intelligence - Search for current CVE/threat data
-9. search_breach_cases - Find recent breach cases and enforcement actions
-10. search_best_practices - Get current industry implementation guidance
+7. search_approved_answers - Find historical questionnaire answers by topic, category, or framework
+8. get_answer_by_id - Get a specific approved answer by ID
+9. list_answer_categories - Browse available answer categories and frameworks
+10. remember_organization_context - Save org info to long-term memory
+11. recall_organization_context - Load org info from previous sessions
+12. search_regulatory_updates - Search the web for latest regulatory news
+13. search_vulnerability_intelligence - Search for current CVE/threat data
+14. search_breach_cases - Find recent breach cases and enforcement actions
+15. search_best_practices - Get current industry implementation guidance
 
 HOW TO HANDLE REQUESTS:
-- FIRST: Call recall_organization_context to check if you already know about this user's org
-- Step 1: Use KB search tools (1-4) to FIND relevant controls quickly
-- Step 2: Use DynamoDB tools (5-6) to GET full details for those specific controls
-- This two-step approach is fast AND complete
-- For gap analysis: search by framework → get full details for matched controls
-- For maturity assessment: search maturity → get full criteria from DynamoDB
-- Never skip step 2 if the user needs maturity criteria or evidence details
-- SAVE: When the user shares org info (size, industry, controls, targets), use
-  remember_organization_context so you remember it next time
+- FIRST: Call recall_organization_context to check if you already know about this user
+- For SCF control questions: KB search then DynamoDB full details
+- For questionnaire help: search_approved_answers FIRST, then supplement with SCF data
+- For gap analysis: search by framework, get full details, compare against user controls
+- SAVE: When the user shares org info, use remember_organization_context
+
+QUESTIONNAIRE ANSWERS:
+- When users ask how to answer a compliance question, ALWAYS check approved answers first
+- If a matching approved answer exists, present it with the source citation
+- If no match, draft a new answer based on SCF controls and best practices
+- Always note the source framework and approval date of historical answers
 
 NOTE ON DATA: Maturity criteria in KB search results are summarized. Use 
 get_control_full_details for complete SCR-CMM level criteria. For the absolute 

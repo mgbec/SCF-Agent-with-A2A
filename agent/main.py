@@ -125,9 +125,13 @@ HOW TO HANDLE REQUESTS:
 - SAVE: When the user shares org info, use remember_organization_context
 
 QUESTIONNAIRE ANSWERS:
-- When users ask how to answer a compliance question, ALWAYS check approved answers first
+- When users ask how to answer a compliance question, ALWAYS use search_approved_answers
+  with the QUERY parameter containing keywords from the question (never use category alone)
+- Example: user asks about "risk assessment" -> call search_approved_answers(query="risk assessment")
+- Do NOT call list_answer_categories first — go straight to keyword search
+- If keyword search returns no results, THEN try with a category filter
 - If a matching approved answer exists, present it with the source citation
-- If no match, draft a new answer based on SCF controls and best practices
+- If no match anywhere, draft a new answer based on SCF controls
 - Always note the source framework and approval date of historical answers
 
 NOTE ON DATA: Maturity criteria in KB search results are summarized. Use 

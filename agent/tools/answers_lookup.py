@@ -64,46 +64,37 @@ def search_approved_answers(query: str, category: str = "", framework: str = "",
         })
 
     try:
-        # If category specified, query the GSI
-        if category:
-            response = table.query(
-                IndexName="category-index",
-                KeyConditionExpression=Key("category").eq(category.lower()),
-                Limit=limit,
-            )
-        elif framework:
-            response = table.query(
-                IndexName="framework-index",
-                KeyConditionExpression=Key("source_framework").eq(framework.upper()),
-                Limit=limit,
-            )
-        else:
-            # Scan with filter — search for keywords in question and answer text
-            # Split query into keywords for better matching
-            keywords = [w.lower() for w in query.split() if len(w) > 3]
+        # ALWAYS do keyword search first (most reliable)
+        response = table.scan(Limit=100)
+        
+        # Split query into keywords for matching
+        keywords = [w.lower() for w in query.split() if len(w) > 3]
+        if not keywords:
+            keywords = [query.lower()]
+        
+        items = []
+        for item in response.get("Items", []):
+            q_text = (item.get("question_text", "") or "").lower()
+            a_text = (item.get("answer_text", "") or "").lower()
+            tags = (item.get("tags", "") or "").lower()
+            cat = (item.get("category", "") or "").lower()
+            searchable = f"{q_text} {a_text} {tags} {cat}"
             
-            # Use the most distinctive keyword for the DynamoDB filter
-            # (DynamoDB contains is case-sensitive, so we scan and filter in Python)
-            response = table.scan(Limit=100)
+            # Apply category/framework filter if specified
+            if category and category.lower() != (item.get("category", "") or "").lower():
+                continue
+            if framework and framework.upper() != (item.get("source_framework", "") or "").upper():
+                continue
             
-            items = []
-            for item in response.get("Items", []):
-                q_text = (item.get("question_text", "") or "").lower()
-                a_text = (item.get("answer_text", "") or "").lower()
-                tags = (item.get("tags", "") or "").lower()
-                searchable = f"{q_text} {a_text} {tags}"
-                
-                # Score by keyword matches
-                score = sum(1 for kw in keywords if kw in searchable)
-                if score >= max(1, len(keywords) // 3):  # At least 1/3 of keywords match
-                    item["_score"] = score
-                    items.append(item)
-            
-            # Sort by relevance score
-            items.sort(key=lambda x: x.get("_score", 0), reverse=True)
-            response = {"Items": items[:limit]}
-
-        items = response.get("Items", [])
+            # Score by keyword matches
+            score = sum(1 for kw in keywords if kw in searchable)
+            if score >= max(1, len(keywords) // 3):
+                item["_score"] = score
+                items.append(item)
+        
+        # Sort by relevance score
+        items.sort(key=lambda x: x.get("_score", 0), reverse=True)
+        items = items[:limit]
 
         if not items:
             return json.dumps({

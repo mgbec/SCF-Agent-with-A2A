@@ -1,0 +1,120 @@
+################################################################################
+# OpenSearch Managed Cluster - Full Vector Store for Knowledge Base
+#
+# ALTERNATIVE to S3 Vectors. No metadata size limits.
+# Estimated cost: ~$50/month (t3.small.search single node)
+#
+# TO ENABLE:
+# 1. Rename this file from opensearch-managed.tf.disabled to opensearch-managed.tf
+# 2. Comment out or remove the S3 Vectors KB config in main.tf
+# 3. Update the KB storage_configuration to use opensearch_managed_cluster_configuration
+# 4. Run: terraform apply
+# 5. Run: python scripts/reindex_kb.py (re-upload text files)
+# 6. Trigger KB ingestion
+################################################################################
+
+resource "aws_opensearch_domain" "scf_vectors" {
+  domain_name    = "${local.name_prefix}-vectors"
+  engine_version = "OpenSearch_2.13"
+
+  cluster_config {
+    instance_type            = "t3.small.search"
+    instance_count           = 1
+    zone_awareness_enabled   = false
+    dedicated_master_enabled = false
+  }
+
+  ebs_options {
+    ebs_enabled = true
+    volume_type = "gp3"
+    volume_size = 20
+  }
+
+  encrypt_at_rest {
+    enabled = true
+  }
+
+  node_to_node_encryption {
+    enabled = true
+  }
+
+  domain_endpoint_options {
+    enforce_https       = true
+    tls_security_policy = "Policy-Min-TLS-1-2-PFS-2023-10"
+  }
+
+  # Access policy - allow the KB role and your account
+  access_policies = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { AWS = [aws_iam_role.knowledge_base.arn, "arn:aws:iam::${local.account_id}:root"] }
+        Action    = "es:*"
+        Resource  = "arn:aws:es:${local.region}:${local.account_id}:domain/${local.name_prefix}-vectors/*"
+      }
+    ]
+  })
+
+  tags = {
+    Component = "vector-store"
+  }
+}
+
+# After the domain is created, you need to create the vector index.
+# Run this once after terraform apply:
+#
+# PUT https://<domain-endpoint>/scf-controls-index
+# {
+#   "settings": {
+#     "index": {
+#       "knn": true,
+#       "knn.algo_param.ef_search": 512
+#     }
+#   },
+#   "mappings": {
+#     "properties": {
+#       "vector": {
+#         "type": "knn_vector",
+#         "dimension": 1024,
+#         "method": {
+#           "engine": "faiss",
+#           "name": "hnsw",
+#           "parameters": {
+#             "ef_construction": 512,
+#             "m": 16
+#           }
+#         }
+#       },
+#       "text": { "type": "text" },
+#       "metadata": { "type": "text" }
+#     }
+#   }
+# }
+#
+# Then update the KB to use this config:
+#
+# storage_configuration {
+#   type = "OPENSEARCH_MANAGED_CLUSTER"
+#
+#   opensearch_managed_cluster_configuration {
+#     domain_arn        = aws_opensearch_domain.scf_vectors.arn
+#     vector_index_name = "scf-controls-index"
+#
+#     field_mapping {
+#       vector_field   = "vector"
+#       text_field     = "text"
+#       metadata_field = "metadata"
+#     }
+#   }
+# }
+
+output "opensearch_endpoint" {
+  description = "OpenSearch domain endpoint (use for index creation)"
+  value       = aws_opensearch_domain.scf_vectors.endpoint
+}
+
+output "opensearch_dashboard" {
+  description = "OpenSearch Dashboards URL"
+  value       = "https://${aws_opensearch_domain.scf_vectors.endpoint}/_dashboards"
+}

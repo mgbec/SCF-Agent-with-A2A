@@ -63,6 +63,8 @@ graph TD
 
 For architecture details, see [docs/architecture-guidelines.md](docs/architecture-guidelines.md).
 
+For vector store upgrade options and evaluation guidance, see [docs/vector-store-options.md](docs/vector-store-options.md).
+
 ### Auto-Update Pipeline
 
 The SCF data stays current via a serverless pipeline:

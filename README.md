@@ -137,7 +137,7 @@ python scripts/ingest_answers.py --file soc2_responses.xlsx --framework SOC2
 python scripts/ingest_answers.py --dir ./questionnaires/ --framework vendor_questionnaire
 
 # Upload a PDF for OCR extraction (auto-triggers Textract pipeline)
-aws s3 cp questionnaire.pdf s3://scf-agent-questionnaire-uploads-339712707840-us-east-1/ --region us-east-1
+aws s3 cp questionnaire.pdf s3://scf-agent-questionnaire-uploads-<ACCOUNT_ID>-us-east-1/ --region us-east-1
 ```
 
 PDFs and images uploaded to S3 are automatically processed by the Textract OCR pipeline.

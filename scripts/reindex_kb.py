@@ -25,12 +25,20 @@ Schedule: Every Monday at 8:00 UTC (ENABLED)
 SSM Parameter: Tracks current version (2026.2)
 import json
 import os
+import subprocess
 
 import boto3
 
-BUCKET = "scf-agent-scf-data-339712707840-us-east-1"
-KB_ID = "7Z1IJYUGD8"
-DS_ID = "WGIGWDAIJZ"
+def _get_terraform_output(key):
+    tf_dir = os.path.join(os.path.dirname(__file__), "..", "terraform")
+    result = subprocess.run(
+        ["terraform", "output", "-raw", key], cwd=tf_dir, capture_output=True, text=True
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+BUCKET = os.environ.get("SCF_DATA_BUCKET") or _get_terraform_output("scf_data_bucket")
+KB_ID = os.environ.get("KNOWLEDGE_BASE_ID") or _get_terraform_output("knowledge_base_id")
+DS_ID = os.environ.get("DATA_SOURCE_ID", "")  # Will be looked up during ingestion
 REGION = "us-east-1"
 SCF_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "SCF-2026-2", "JSON", "scf-full-2026.2.json"
@@ -173,14 +181,26 @@ def main():
     print("  Domain summary uploaded.")
 
     # Step 5: Trigger KB ingestion
-    print(f"\nTriggering Knowledge Base ingestion (KB: {KB_ID}, DS: {DS_ID})...")
+    print(f"\nTriggering Knowledge Base ingestion (KB: {KB_ID})...")
     bedrock = boto3.client("bedrock-agent", region_name=REGION)
-    response = bedrock.start_ingestion_job(knowledgeBaseId=KB_ID, dataSourceId=DS_ID)
+    
+    # Look up data source ID if not provided
+    ds_id = DS_ID
+    if not ds_id:
+        ds_response = bedrock.list_data_sources(knowledgeBaseId=KB_ID)
+        sources = ds_response.get("dataSourceSummaries", [])
+        if sources:
+            ds_id = sources[0]["dataSourceId"]
+        else:
+            print("  WARNING: No data sources found for KB. Skipping ingestion.")
+            return
+    
+    response = bedrock.start_ingestion_job(knowledgeBaseId=KB_ID, dataSourceId=ds_id)
     job_id = response["ingestionJob"]["ingestionJobId"]
     print(f"  Ingestion job started: {job_id}")
     print(
         f"  Monitor: aws bedrock-agent get-ingestion-job "
-        f"--knowledge-base-id {KB_ID} --data-source-id {DS_ID} "
+        f"--knowledge-base-id {KB_ID} --data-source-id {ds_id} "
         f"--ingestion-job-id {job_id} --region {REGION}"
     )
     print(f"\n  NOTE: Maturity criteria trimmed to {MAX_CMM_CHARS} chars/level.")

@@ -41,13 +41,17 @@ graph TD
     subgraph "Data Layer"
         KB["📚 Bedrock KB - S3 Vectors<br/>Trimmed text for semantic search"]
         DDB["🗄️ DynamoDB<br/>Full control data - 1,534 items"]
+        Answers["📋 DynamoDB<br/>Approved Answers - historical Q&A"]
+        AuditLog["📝 DynamoDB<br/>Audit Log - change history"]
         MemStore["🧠 AgentCore Memory<br/>Org context - 90 day retention"]
         GW["🌐 MCP Gateway + Web Search Connector"]
     end
 
     subgraph "Storage & Updates"
         S3["S3 Bucket - 1,535 .txt files"]
+        S3Uploads["S3 Bucket - Questionnaire uploads"]
         Updater["⏰ Lambda + EventBridge<br/>Weekly SCF version check"]
+        Textract["📄 Textract Pipeline<br/>OCR → Q&A extraction"]
     end
 
     CLI -->|"SigV4"| Agent
@@ -63,16 +67,25 @@ graph TD
     T7 & T8 --> MemStore
     T9 & T10 & T11 & T12 -->|"SigV4 MCP"| GW
     
+    Agent -->|"Answers search"| Answers
+    Answers -->|"Stream"| AuditLog
+    
     KB --> S3
     Updater --> S3
     Updater --> DDB
+    S3Uploads -->|"EventBridge"| Textract
+    Textract --> Answers
+    GW --> WebIndex["AWS Managed<br/>Web Index"]
 
     style Agent fill:#ff9900,color:#fff
     style KB fill:#232f3e,color:#fff
     style DDB fill:#232f3e,color:#fff
+    style Answers fill:#232f3e,color:#fff
+    style AuditLog fill:#232f3e,color:#fff
     style MemStore fill:#232f3e,color:#fff
     style GW fill:#147b3b,color:#fff
     style Updater fill:#8c4fff,color:#fff
+    style Textract fill:#8c4fff,color:#fff
 ```
 
 ## Data Flow Patterns
@@ -180,13 +193,25 @@ Admin updates an answer's text or status
 
 | Component | Purpose | Size Limit | Cost Model |
 |-----------|---------|------------|------------|
-| AgentCore Runtime | Hosts agent container (ARM64) | No response size limit but ~60s timeout | Per-session |
+| AgentCore Runtime | Hosts agent container (ARM64) | ~60s response timeout | Per-session |
 | Bedrock KB (S3 Vectors) | Semantic search over controls | 2048 bytes metadata/record | Per-query |
-| DynamoDB | Full control data storage | 400KB/item (plenty) | Per-request (pay-per-use) |
+| DynamoDB (SCF Controls) | Full control data storage | 400KB/item (plenty) | Per-request |
+| DynamoDB (Approved Answers) | Historical questionnaire responses | 400KB/item | Per-request |
+| DynamoDB (Audit Log) | Change history for answers | 400KB/item | Per-request |
 | AgentCore Memory | Cross-session org context | 90-day retention | Per-operation |
-| S3 Bucket | Source text files for KB | No limit | Storage + requests |
+| S3 Bucket (SCF data) | Source text files for KB | No limit | Storage + requests |
+| S3 Bucket (Uploads) | Questionnaire documents for OCR | No limit | Storage + requests |
 | ECR | Agent container images | No limit | Storage |
-| Web Search Gateway | Live internet access | 200 char query | Per-search |
+| MCP Gateway + Web Search | Live internet access | 200 char query | Per-search |
+| Bedrock Guardrail | Content filtering (topic, PII) | N/A | Per-invocation |
+| Lambda (Auto-updater) | Weekly SCF version check | 5-min timeout | Per-invocation |
+| Lambda (Textract pipeline) | OCR extraction from uploads | 15-min timeout | Per-invocation |
+| Lambda (Audit logger) | DynamoDB Stream processor | 1-min timeout | Per-invocation |
+| EventBridge (SCF update) | Weekly cron trigger | N/A | Free |
+| EventBridge (S3 upload) | Document upload trigger | N/A | Free |
+| SNS Topic | Update/extraction notifications | N/A | Per-message |
+| SSM Parameter | Tracks deployed SCF version | N/A | Free |
+| OpenSearch Managed (optional) | Full vector store upgrade | No metadata limit | ~$50/month |
 
 ## Security Model
 

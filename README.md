@@ -141,7 +141,23 @@ aws s3 cp questionnaire.pdf s3://scf-agent-questionnaire-uploads-<ACCOUNT_ID>-us
 ```
 
 PDFs and images uploaded to S3 are automatically processed by the Textract OCR pipeline.
-Extracted Q&A pairs are stored as `DRAFT` status and can be approved before use.
+Extracted Q&A pairs are stored as `DRAFT` status and must be approved before the agent uses them.
+
+### Approval Workflow
+
+```powershell
+# Run the frontend
+cd frontend
+streamlit run app.py
+```
+
+Navigate to **✅ Approve Answers** in the sidebar to:
+- View all DRAFT answers extracted from uploaded documents
+- Edit answer text before approving
+- Approve (sets status, records who/when) or Reject
+- See summary metrics (total, approved, draft, rejected)
+
+The agent only surfaces `APPROVED` answers when responding to queries.
 
 ### Audit Trail
 
@@ -328,11 +344,17 @@ scf-compliance-agent/
 │   ├── ask.py                  # CLI query tool (interactive + single-shot)
 │   ├── generate_report.py      # Multi-step report generator
 │   ├── preflight.py            # Pre-deployment validation
+│   ├── eval_retrieval.py       # Automated retrieval accuracy evaluation
 │   ├── ingest_answers.py       # Import questionnaire answers (CSV/XLSX/JSON)
 │   ├── load_dynamodb.py        # Load full SCF data into DynamoDB
 │   ├── reindex_kb.py           # Reload trimmed text into KB (S3 Vectors)
 │   ├── upload_scf_data.py      # Legacy: initial S3 upload (use load_dynamodb.py instead)
 │   └── test_agent.py           # Integration test suite
+├── frontend/
+│   ├── app.py                  # Chat interface (Streamlit)
+│   ├── pages/
+│   │   └── 2_Approve_Answers.py # Answer approval queue
+│   └── requirements.txt
 └── sample-project/             # Fictional company for demos (Acme HealthTech)
     ├── organization-profile.json
     ├── controls-inventory.csv

@@ -165,6 +165,21 @@ Admin updates an answer's text or status
   5. 365-day retention for compliance evidence
 ```
 
+### Pattern 9: Answer Approval Workflow
+```
+Document uploaded to S3
+  1. Textract extracts Q&A pairs → DynamoDB (status: DRAFT)
+  2. Reviewer opens Streamlit "Approve Answers" page
+  3. Reviews question + extracted answer
+  4. Optionally edits the answer text
+  5. Clicks Approve → status set to APPROVED, name + date recorded
+  6. Audit log captures: who approved, when, before/after text
+  7. Agent can now find and return this answer
+  
+  OR: Reviewer clicks Reject → status: REJECTED (stays for audit trail)
+  OR: Reviewer clicks Delete → removed from DB (audit log preserves record)
+```
+
 ## Design Principles
 
 ### 1. Retrieval First, Never Batch Load

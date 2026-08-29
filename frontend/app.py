@@ -100,7 +100,11 @@ st.set_page_config(
     page_title="SCF Compliance Agent",
     page_icon="🛡️",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
+
+# Override the default page name in sidebar navigation
+st.html("<style>[data-testid='stSidebarNav'] li:first-child a span {visibility:hidden; position:relative;} [data-testid='stSidebarNav'] li:first-child a span::after {content:'💬 Chat'; visibility:visible; position:absolute; left:0;}</style>")
 
 st.title("🛡️ SCF Compliance Agent")
 st.caption("Secure Controls Framework 2026.2 • 1,534 controls • 252+ frameworks")

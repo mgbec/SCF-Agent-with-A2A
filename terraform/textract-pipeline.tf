@@ -17,7 +17,7 @@ resource "aws_lambda_function" "textract_pipeline" {
   role             = aws_iam_role.textract_pipeline.arn
   handler          = "handler.lambda_handler"
   runtime          = "python3.13"
-  timeout          = 900  # 15 minutes (Textract can be slow on large PDFs)
+  timeout          = 900 # 15 minutes (Textract can be slow on large PDFs)
   memory_size      = 1024
   filename         = data.archive_file.textract_pipeline.output_path
   source_code_hash = data.archive_file.textract_pipeline.output_base64sha256

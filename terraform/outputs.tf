@@ -61,3 +61,68 @@ output "guardrail_id" {
   description = "Bedrock Guardrail ID"
   value       = aws_bedrock_guardrail.scf_agent.guardrail_id
 }
+
+################################################################################
+# A2A (Agent-to-Agent) ingress
+################################################################################
+
+output "a2a_api_endpoint" {
+  description = "Base URL of the A2A HTTP API"
+  value       = local.a2a_enabled ? local.a2a_base_url : null
+}
+
+output "a2a_cognito_rpc_url" {
+  description = "A2A JSON-RPC endpoint guarded by the Cognito authorizer (also handles message/stream)"
+  value       = local.a2a_enabled ? "${local.a2a_base_url}/cognito/rpc" : null
+}
+
+output "a2a_cognito_agent_card_url" {
+  description = "Public A2A Agent Card for the Cognito route"
+  value       = local.a2a_enabled ? "${local.a2a_base_url}/cognito/.well-known/agent-card.json" : null
+}
+
+output "a2a_entra_rpc_url" {
+  description = "A2A JSON-RPC endpoint guarded by the Entra ID authorizer"
+  value       = local.a2a_entra ? "${local.a2a_base_url}/entra/rpc" : null
+}
+
+output "a2a_entra_agent_card_url" {
+  description = "Public A2A Agent Card for the Entra ID route"
+  value       = local.a2a_entra ? "${local.a2a_base_url}/entra/.well-known/agent-card.json" : null
+}
+
+output "a2a_generic_agent_card_url" {
+  description = "Public A2A Agent Card listing both auth schemes"
+  value       = local.a2a_enabled ? "${local.a2a_base_url}/.well-known/agent-card.json" : null
+}
+
+output "cognito_user_pool_id" {
+  description = "Cognito user pool ID backing the A2A Cognito route"
+  value       = local.a2a_enabled ? aws_cognito_user_pool.a2a[0].id : null
+}
+
+output "cognito_a2a_token_endpoint" {
+  description = "Cognito OAuth2 token endpoint (client_credentials + authorization_code)"
+  value       = local.a2a_enabled ? "${local.cognito_a2a_domain_base}/oauth2/token" : null
+}
+
+output "cognito_a2a_scope" {
+  description = "Custom OAuth2 scope required to invoke the agent via the Cognito route"
+  value       = local.a2a_enabled ? "${aws_cognito_resource_server.a2a[0].identifier}/invoke" : null
+}
+
+output "cognito_a2a_m2m_client_id" {
+  description = "Client ID of the machine-to-machine (client_credentials) Cognito app client"
+  value       = local.a2a_enabled ? aws_cognito_user_pool_client.a2a_m2m[0].id : null
+}
+
+output "cognito_a2a_m2m_client_secret" {
+  description = "Client secret of the machine-to-machine Cognito app client"
+  value       = local.a2a_enabled ? aws_cognito_user_pool_client.a2a_m2m[0].client_secret : null
+  sensitive   = true
+}
+
+output "cognito_a2a_web_client_id" {
+  description = "Client ID of the interactive (authorization_code / hosted UI) Cognito app client"
+  value       = local.a2a_enabled ? aws_cognito_user_pool_client.a2a_web[0].id : null
+}

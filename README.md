@@ -216,6 +216,28 @@ The agent is secured by AWS IAM. Anyone invoking it needs AWS credentials with
 `bedrock-agentcore:InvokeAgentRuntime` permission on the agent ARN. No API keys,
 no OAuth — your existing `aws configure` credentials handle it automatically.
 
+### Agent-to-Agent (A2A) access
+
+For callers that are *other agents* rather than AWS principals, an API Gateway HTTP API
+accepts incoming [A2A protocol](https://a2a-protocol.org) connections (JSON-RPC 2.0 +
+Agent Card discovery) and forwards them to the same AgentCore Runtime. Two routes, each
+with its own JWT authorizer:
+
+| Route | Authorizer |
+|-------|-----------|
+| `POST /cognito/rpc` | Amazon Cognito (M2M client_credentials **and** hosted-UI users) |
+| `POST /entra/rpc` | Microsoft Entra ID (optional — set `entra_tenant_id`) |
+
+```powershell
+cd terraform
+terraform apply
+terraform output a2a_cognito_agent_card_url   # discover
+terraform output a2a_cognito_rpc_url           # call
+```
+
+Full setup, token recipes, Entra app-registration steps, and sample calls are in
+[docs/a2a-integration.md](docs/a2a-integration.md).
+
 ## Sample Queries
 
 ### Control Lookup
@@ -322,6 +344,8 @@ scf-compliance-agent/
 ├── terraform/
 │   ├── main.tf                 # Core infra (KB, Runtime, Gateway, S3, ECR, IAM)
 │   ├── scf-updater.tf         # Auto-update pipeline (Lambda, EventBridge, SNS)
+│   ├── a2a.tf                  # A2A ingress (API Gateway, JWT authorizers, bridge Lambda)
+│   ├── cognito-a2a.tf          # Cognito user pool + M2M / hosted-UI clients for A2A
 │   ├── variables.tf            # Input variables
 │   ├── outputs.tf              # Output values
 │   ├── terraform.tfvars.example
@@ -338,8 +362,11 @@ scf-compliance-agent/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── lambda/
-│   └── scf_updater/
-│       └── handler.py          # Weekly SCF version check + update
+│   ├── scf_updater/
+│   │   └── handler.py          # Weekly SCF version check + update
+│   └── a2a_bridge/
+│       ├── handler.py          # A2A JSON-RPC ↔ AgentCore Runtime bridge
+│       └── agent_card.py       # Builds the per-route A2A Agent Card
 ├── scripts/
 │   ├── ask.py                  # CLI query tool (interactive + single-shot)
 │   ├── generate_report.py      # Multi-step report generator
@@ -380,6 +407,11 @@ scf-compliance-agent/
 | AgentCore Memory | `aws_bedrockagentcore_memory` | Long-term org context (90-day retention) |
 | MCP Gateway | `aws_bedrockagentcore_gateway` | Web Search connector via MCP |
 | HTTP Gateway | `aws_bedrockagentcore_gateway` | Routes traffic to the agent runtime |
+| A2A HTTP API | `aws_apigatewayv2_api` | Incoming A2A (Agent-to-Agent) connections |
+| A2A JWT Authorizers | `aws_apigatewayv2_authorizer` | Cognito + Entra ID token validation |
+| A2A Bridge Lambda | `aws_lambda_function` | Translates A2A JSON-RPC → `InvokeAgentRuntime` |
+| A2A Task Store | `aws_dynamodb_table` | Completed A2A tasks, 24h TTL (`tasks/get`) |
+| Cognito User Pool | `aws_cognito_user_pool` | Identity provider for the A2A Cognito route |
 | ECR Repository | `aws_ecr_repository` | Agent container images (ARM64) |
 | Bedrock Guardrail | `aws_bedrock_guardrail` | Content filtering + topic enforcement |
 | Audit Logger Lambda | `aws_lambda_function` | Captures all answer changes to audit log |

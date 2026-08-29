@@ -14,3 +14,32 @@ log_level = "INFO"
 
 # Email for SCF update notifications (optional - leave empty to skip)
 notification_email = "security-team@example.com"
+
+################################################################################
+# A2A (Agent-to-Agent) ingress
+################################################################################
+
+# Provision the API Gateway HTTP API + bridge Lambda for incoming A2A connections
+enable_a2a = true
+
+# Name published in the A2A Agent Card
+agent_public_name = "SCF Compliance Assessment Agent"
+
+# Globally-unique Cognito hosted-UI domain prefix
+# -> <prefix>.auth.<region>.amazoncognito.com  (must not already be taken)
+cognito_a2a_domain_prefix = "scf-agent-a2a"
+
+# Callback/logout URLs for the interactive Cognito app client (hosted UI login)
+cognito_a2a_web_callback_urls = ["http://localhost:8501/"]
+
+# --- Microsoft Entra ID route (optional) ---
+# Leave entra_tenant_id empty to skip the Entra-authorized route entirely.
+# See docs/a2a-integration.md for how to create the Entra app registration.
+entra_tenant_id = ""
+# App ID URI or client ID of this API's Entra app registration (the token `aud`)
+entra_audience = ""
+# Set only for v1.0 tokens: "https://sts.windows.net/<tenant-id>/"
+entra_issuer_override = ""
+
+# Optional custom domain for the A2A API (only changes URLs in the Agent Card)
+a2a_custom_domain = ""

@@ -158,11 +158,66 @@ The `aws_bedrockagentcore_gateway_target` resource for HTTP targets produces a
 .credential_provider_configuration: block count changed from 0 to 1
 ```
 
-The resource **was created successfully** — the error is the provider not
-expecting the API to return a credential_provider block when none was specified.
+The API always returns a `credential_provider_configuration { gateway_iam_role {} }`
+block for an `agentcore_runtime` target; the provider didn't expect it. Left
+undeclared, every `terraform plan` also perpetually tried to remove it.
 
-**Workaround:** Run `terraform apply -refresh-only` after the first apply to
-sync state. Subsequent applies work cleanly.
+**Fix:** declare the block so the config matches the API. `terraform/main.tf` now
+has it, and `terraform plan` is clean. (The old `-refresh-only` workaround only
+silenced the state mismatch for one apply.)
+
+## Frontend hosting: not App Runner
+
+The Streamlit frontend was first put on **AWS App Runner** (simple, free HTTPS URL,
+no VPC). It doesn't work: **App Runner has no WebSocket support**, and Streamlit's
+entire UI runs over a `/_stcore/stream` WebSocket — the page loads the shell and
+then hangs on the loading skeleton.
+
+Chosen instead: **ECS Fargate behind an ALB, with CloudFront in front.** CloudFront
+gives a free HTTPS `*.cloudfront.net` domain (no ACM cert / custom domain needed)
+and forwards WebSockets; the ALB and Fargate handle the rest. CloudFront injects a
+secret `X-Origin-Verify` header and the ALB 403s anything without it, so the ALB
+can't be reached directly. ~$25-35/mo (ALB + always-on task). See
+`docs/frontend-deployment.md`.
+
+Lightsail container service also supports WebSockets and is cheaper, but Lightsail
+containers can't assume an IAM role — you'd bake a static access key into the
+image — so it was rejected on security grounds.
+
+## ARM64 builds and QEMU binfmt
+
+On an x86 build host, `docker build --platform linux/arm64` depends on QEMU
+`binfmt_misc` handlers. If they aren't registered, cross-arch `RUN` steps fail with
+`exec /bin/sh: exec format error`, and — depending on layer cache — the build can
+**silently reuse the previous image** and `docker push` becomes a no-op. The agent
+then keeps running old code even though the pipeline "succeeded".
+
+Register once per machine: `docker run --privileged --rm tonistiigi/binfmt --install arm64`.
+For a real change, build `--no-cache` and verify the image content
+(`docker create` + `docker cp` the file out) before rolling the runtime.
+
+## Bedrock Guardrail: topic policies hit the output too
+
+A `topic_policy_config` DENY topic is evaluated against the **model response**, not
+just the prompt. A broadly-worded "off_topic" topic ("anything not about
+cybersecurity/compliance/...") blocked the agent's own answers — even "what is
+control GOV-01?" and its capability overview — returning the guardrail's
+blocked-output message for almost every request.
+
+Fix: removed that topic. The guardrail keeps `PROMPT_ATTACK`, PII anonymisation,
+and a narrow `harmful_security` topic (hacking / exploits / bypassing controls).
+Off-topic misuse is handled by `_validate_input()` in `agent/main.py` and the
+system prompt. `aws_bedrock_guardrail_version` has
+`replace_triggered_by = [aws_bedrock_guardrail.scf_agent]` so a fresh immutable
+version is cut on every edit and `GUARDRAIL_VERSION` on the runtime tracks it.
+
+## Two-phase apply for self-referential URLs
+
+The A2A API and the frontend both need their own public URL baked into
+configuration that is created in the same apply (Cognito callback URLs, the
+container's `AUTH_REDIRECT_URI`, Agent Card `url`). Rather than a dependency cycle,
+a `*_base_url` variable is left empty for the first apply and set to the
+corresponding output for a second apply. Documented in each runbook.
 
 ## Summary of Key Lessons
 
@@ -172,6 +227,12 @@ sync state. Subsequent applies work cleanly.
    bucket/index and provide explicit ARNs.
 3. **Bedrock's "unable to assume role" error is a catch-all** — Debug by trying
    the CLI directly and reading the actual sub-error.
-4. **ARM64 cross-compilation is painful locally** — Plan for CI/CD on native ARM64.
+4. **ARM64 cross-compilation is painful locally** — Register QEMU binfmt handlers,
+   build `--no-cache`, and verify image content; plan for CI/CD on native ARM64.
 5. **The Terraform AWS provider for AgentCore is new** — Expect rough edges,
-   missing resources (connectors), and inconsistent state bugs.
+   missing resources (connectors), and inconsistent state bugs; declare blocks the
+   API returns even when they're "optional".
+6. **Streamlit needs WebSockets** — App Runner can't host it; Fargate + ALB +
+   CloudFront can, with no custom domain.
+7. **Guardrail topic policies filter output** — keep DENY topics narrow or they
+   block legitimate answers.

@@ -8,17 +8,23 @@ gap analysis, and remediation guidance.
 
 ```mermaid
 graph TD
-    User["👤 User (CLI / Web UI)"] -->|"AWS IAM SigV4"| Runtime["AgentCore Runtime<br/>Strands Agent + Claude Sonnet 4.6"]
-    
+    CLI["👤 CLI / scripts<br/>ask.py, generate_report.py"] -->|"AWS IAM SigV4"| Runtime
+    Web["🌐 Hosted UI<br/>CloudFront → ALB → Fargate<br/>Streamlit + Cognito login"] -->|"InvokeAgentRuntime"| Runtime
+    A2A["🤝 Other agents<br/>A2A JSON-RPC + Agent Card"] -->|"Bearer JWT"| APIGW["API Gateway HTTP API<br/>Cognito / Entra ID authorizers"]
+    APIGW --> Bridge["A2A Bridge Lambda"]
+    Bridge -->|"InvokeAgentRuntime"| Runtime
+    Bridge --> Tasks["🗄️ DynamoDB<br/>A2A tasks (24h TTL)"]
+
+    Runtime["AgentCore Runtime<br/>Strands Agent + Claude Sonnet 4.6<br/>+ Bedrock Guardrail"]
     Runtime -->|"1. Discovery"| KB["📚 Bedrock KB<br/>S3 Vectors<br/>Semantic Search"]
     Runtime -->|"2. Full Details"| DDB["🗄️ DynamoDB<br/>SCF Controls<br/>1,534 items"]
     Runtime -->|"3. Past Answers"| Answers["📋 DynamoDB<br/>Approved Answers<br/>Questionnaire History"]
     Runtime -->|"4. Remember/Recall"| Memory["🧠 AgentCore Memory<br/>Org Context<br/>90-day retention"]
     Runtime -->|"5. Web Research"| Gateway["🌐 MCP Gateway<br/>SigV4 Signed"]
-    
+
     Gateway --> WebSearch["Web Search Connector<br/>AWS Managed Index"]
     KB --> S3["S3 Bucket<br/>1,535 .txt files"]
-    
+
     Ingest["📥 ingest_answers.py<br/>CSV / XLSX / JSON"] --> Answers
     Updater["⏰ Auto-Updater<br/>Lambda + EventBridge<br/>Weekly check"] -->|"New SCF version"| S3
     Updater -->|"Reload"| DDB
@@ -29,10 +35,21 @@ graph TD
     style Answers fill:#232f3e,color:#fff
     style Memory fill:#232f3e,color:#fff
     style Gateway fill:#232f3e,color:#fff
+    style Tasks fill:#232f3e,color:#fff
     style WebSearch fill:#147b3b,color:#fff
     style Updater fill:#8c4fff,color:#fff
     style Ingest fill:#8c4fff,color:#fff
+    style APIGW fill:#c925d1,color:#fff
+    style Bridge fill:#c925d1,color:#fff
+    style Web fill:#2e73b8,color:#fff
 ```
+
+**Three ways in, one agent:** the AgentCore Runtime is reachable by (1) AWS principals
+via IAM SigV4 (`scripts/ask.py`, `test_agent.py`), (2) the hosted Streamlit UI on
+CloudFront → ALB → Fargate with Cognito login, and (3) other agents over the A2A
+protocol through an API Gateway HTTP API with Cognito / Entra ID JWT authorizers. The
+runtime applies a Bedrock Guardrail (prompt-attack + PII + harmful-security filtering)
+on every model call.
 
 ## What It Does
 
@@ -147,11 +164,12 @@ Extracted Q&A pairs are stored as `DRAFT` status and must be approved before the
 
 ### Approval Workflow
 
-The frontend is **hosted on AWS App Runner** (`terraform/frontend.tf`) — get the
-URL with `terraform output -raw frontend_url` and sign in with a Cognito user
-(`aws cognito-idp admin-create-user ...`). First-time deploy and the two-phase
-`frontend_base_url` step are in
-[docs/frontend-deployment.md](docs/frontend-deployment.md#deployed-aws-app-runner-this-is-what-terraform-apply-provisions).
+The frontend is **hosted on AWS: ECS Fargate behind an ALB, with CloudFront in front**
+for a free HTTPS `*.cloudfront.net` URL that supports the WebSocket Streamlit needs
+(`terraform/frontend.tf`). Get the URL with `terraform output -raw frontend_url` and
+sign in with a Cognito user (`aws cognito-idp admin-create-user ...`). First-time
+deploy (image bootstrap + the two-phase `frontend_base_url` step) is in
+[docs/frontend-deployment.md](docs/frontend-deployment.md#deployed-ecs-fargate--alb--cloudfront-this-is-what-terraform-apply-provisions).
 
 To run it locally instead — the frontend still requires login before any page
 renders; configure authentication once, then run it:
@@ -239,9 +257,13 @@ Get-Content response.json | ConvertFrom-Json | Select-Object -ExpandProperty res
 
 ### Authentication
 
-The agent is secured by AWS IAM. Anyone invoking it needs AWS credentials with
-`bedrock-agentcore:InvokeAgentRuntime` permission on the agent ARN. No API keys,
-no OAuth — your existing `aws configure` credentials handle it automatically.
+Three independent paths, three auth models:
+
+| Path | Auth |
+|------|------|
+| Direct `InvokeAgentRuntime` (CLI, `scripts/`, IAM principals) | AWS IAM / SigV4 — needs `bedrock-agentcore:InvokeAgentRuntime` on the agent ARN; your `aws configure` credentials handle it automatically |
+| Hosted Streamlit UI | Cognito OIDC login (`st.login`); the app fails closed with no login configured |
+| A2A ingress (other agents) | OAuth2 / OIDC **bearer JWT** validated at API Gateway — Amazon Cognito or Microsoft Entra ID (see below) |
 
 ### Agent-to-Agent (A2A) access
 
@@ -370,9 +392,12 @@ scf-compliance-agent/
 ├── .gitignore
 ├── terraform/
 │   ├── main.tf                 # Core infra (KB, Runtime, Gateway, S3, ECR, IAM)
+│   ├── guardrails.tf           # Bedrock Guardrail + immutable version
 │   ├── scf-updater.tf         # Auto-update pipeline (Lambda, EventBridge, SNS)
 │   ├── a2a.tf                  # A2A ingress (API Gateway, JWT authorizers, bridge Lambda)
 │   ├── cognito-a2a.tf          # Cognito user pool + M2M / hosted-UI clients for A2A
+│   ├── frontend.tf             # Hosted Streamlit: ECS Fargate + ALB + CloudFront + Cognito client
+│   ├── deploy-operator-policy.tf # Managed IAM policy for whoever runs the deploy scripts
 │   ├── variables.tf            # Input variables
 │   ├── outputs.tf              # Output values
 │   ├── terraform.tfvars.example
@@ -387,10 +412,16 @@ scf-compliance-agent/
 │   │   └── web_research.py    # Live web search (regulatory, CVE, breaches)
 │   ├── wheels/                 # Pre-downloaded ARM64 wheels (fast Docker builds)
 │   ├── requirements.txt
-│   └── Dockerfile
+│   ├── Dockerfile
+│   ├── build-and-push.ps1      # Build + push the ARM64 agent image (-UpdateRuntime to roll)
+│   └── update-runtime.ps1      # Roll the runtime onto a freshly pushed :latest image
 ├── lambda/
 │   ├── scf_updater/
 │   │   └── handler.py          # Weekly SCF version check + update
+│   ├── audit_logger/
+│   │   └── handler.py          # DynamoDB Stream → answer audit log
+│   ├── textract_pipeline/
+│   │   └── handler.py          # OCR extraction from uploaded documents
 │   └── a2a_bridge/
 │       ├── handler.py          # A2A JSON-RPC ↔ AgentCore Runtime bridge
 │       └── agent_card.py       # Builds the per-route A2A Agent Card
@@ -405,10 +436,25 @@ scf-compliance-agent/
 │   ├── upload_scf_data.py      # Legacy: initial S3 upload (use load_dynamodb.py instead)
 │   └── test_agent.py           # Integration test suite
 ├── frontend/
-│   ├── app.py                  # Chat interface (Streamlit)
+│   ├── app.py                  # Chat interface (Streamlit, boto3 InvokeAgentRuntime)
+│   ├── auth.py                 # Fail-closed OIDC login gate (st.login / st.user)
 │   ├── pages/
-│   │   └── 2_Approve_Answers.py # Answer approval queue
+│   │   └── 2_Approve_Answers.py # Answer approval queue (approver = signed-in identity)
+│   ├── .streamlit/
+│   │   ├── config.toml
+│   │   └── secrets.toml.example
+│   ├── Dockerfile              # python:3.13-slim; entrypoint writes secrets.toml from env
+│   ├── entrypoint.sh
+│   ├── build-and-push.ps1      # Build + push the frontend image (linux/amd64)
 │   └── requirements.txt
+├── docs/
+│   ├── architecture-guidelines.md
+│   ├── deployment-decisions.md
+│   ├── a2a-integration.md          # A2A auth setup, token recipes, sample calls
+│   ├── frontend-deployment.md      # Fargate + ALB + CloudFront runbook
+│   ├── deploying-security-updates.md # Guardrail + prompt hardening + frontend auth runbook
+│   ├── troubleshooting.md
+│   └── vector-store-options.md
 └── sample-project/             # Fictional company for demos (Acme HealthTech)
     ├── organization-profile.json
     ├── controls-inventory.csv
@@ -438,9 +484,16 @@ scf-compliance-agent/
 | A2A JWT Authorizers | `aws_apigatewayv2_authorizer` | Cognito + Entra ID token validation |
 | A2A Bridge Lambda | `aws_lambda_function` | Translates A2A JSON-RPC → `InvokeAgentRuntime` |
 | A2A Task Store | `aws_dynamodb_table` | Completed A2A tasks, 24h TTL (`tasks/get`) |
-| Cognito User Pool | `aws_cognito_user_pool` | Identity provider for the A2A Cognito route |
-| ECR Repository | `aws_ecr_repository` | Agent container images (ARM64) |
-| Bedrock Guardrail | `aws_bedrock_guardrail` | Content filtering + topic enforcement |
+| Cognito User Pool | `aws_cognito_user_pool` | Shared identity provider for the A2A Cognito route + the hosted UI |
+| ECR Repository (agent) | `aws_ecr_repository` | Agent container images (ARM64) |
+| ECR Repository (frontend) | `aws_ecr_repository` | Streamlit frontend images (x86_64) |
+| Frontend Service | `aws_ecs_service` (Fargate) | Runs the Streamlit container |
+| Frontend Load Balancer | `aws_lb` | ALB; only accepts the CloudFront edge prefix list |
+| Frontend CDN | `aws_cloudfront_distribution` | Free HTTPS `*.cloudfront.net` + WebSocket for Streamlit |
+| Frontend Cognito Client | `aws_cognito_user_pool_client` | Confidential OIDC client for `st.login` |
+| Frontend Auth Secrets | `aws_ssm_parameter` (SecureString) | Cognito client secret + Streamlit cookie secret |
+| Deploy Operator Policy | `aws_iam_policy` | Least-privilege policy for whoever runs `build-and-push.ps1` / `update-runtime.ps1` (not attached) |
+| Bedrock Guardrail | `aws_bedrock_guardrail` + `_version` | Prompt-attack + PII + harmful-security filtering on every model call |
 | Audit Logger Lambda | `aws_lambda_function` | Captures all answer changes to audit log |
 | Textract Pipeline Lambda | `aws_lambda_function` | OCR extraction from uploaded documents |
 | Lambda Function | `aws_lambda_function` | Weekly SCF version checker/updater |
@@ -465,6 +518,16 @@ scf-compliance-agent/
 |----------|-------------|---------|
 | `log_level` | Agent log level (DEBUG/INFO/WARNING/ERROR) | `INFO` |
 | `notification_email` | Email for SCF update alerts | `""` (disabled) |
+| `enable_a2a` | Provision the A2A API Gateway + bridge Lambda | `true` |
+| `agent_public_name` | Name published in the A2A Agent Card | `SCF Compliance Assessment Agent` |
+| `cognito_a2a_domain_prefix` | Globally-unique Cognito hosted-UI domain prefix | `scf-agent-a2a` |
+| `cognito_a2a_web_callback_urls` | Allowed callback/logout URLs for the hosted-UI Cognito client | `["http://localhost:8501/oauth2callback", "http://localhost:8501/"]` |
+| `entra_tenant_id` | Microsoft Entra tenant ID; empty = skip the `/entra/*` route | `""` |
+| `entra_audience` | Expected `aud` for Entra tokens (App ID URI or client ID) | `""` |
+| `entra_issuer_override` | Force a non-default Entra issuer (e.g. v1.0 `sts.windows.net`) | `""` |
+| `a2a_custom_domain` | Vanity host for the A2A Agent Card URLs (DNS/cert managed elsewhere) | `""` |
+| `enable_frontend` | Host the Streamlit UI on Fargate + ALB + CloudFront (needs `enable_a2a`) | `true` |
+| `frontend_base_url` | Public HTTPS base URL of the frontend; set to the `frontend_url` output on the 2nd apply | `""` |
 
 ## Naming Conventions
 

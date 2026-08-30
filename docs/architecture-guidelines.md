@@ -4,10 +4,13 @@
 
 ```mermaid
 graph TD
-    subgraph "User Interface"
-        CLI["ask.py --interactive"]
-        Report["generate_report.py"]
-        Future["Future: Web UI"]
+    subgraph "Ingress"
+        CLI["ask.py / generate_report.py<br/>(IAM SigV4)"]
+        WebUI["Hosted Streamlit UI<br/>CloudFront → ALB → Fargate<br/>(Cognito login)"]
+        A2A["A2A clients<br/>(other agents)"]
+        APIGW["API Gateway HTTP API<br/>Cognito / Entra JWT authorizers"]
+        Bridge["A2A Bridge Lambda"]
+        A2A -->|"Bearer JWT"| APIGW --> Bridge
     end
 
     subgraph "AgentCore Runtime (ARM64 Container)"
@@ -55,8 +58,10 @@ graph TD
     end
 
     CLI -->|"SigV4"| Agent
-    Report -->|"SigV4"| Agent
-    
+    WebUI -->|"InvokeAgentRuntime"| Agent
+    Bridge -->|"InvokeAgentRuntime"| Agent
+    Bridge --> A2ATasks["🗄️ DynamoDB<br/>A2A tasks (24h TTL)"]
+
     Agent --> T1 & T2 & T3 & T4
     Agent --> T5 & T6
     Agent --> T7 & T8
@@ -169,15 +174,28 @@ Admin updates an answer's text or status
 ```
 Document uploaded to S3
   1. Textract extracts Q&A pairs → DynamoDB (status: DRAFT)
-  2. Reviewer opens Streamlit "Approve Answers" page
+  2. Reviewer opens the hosted Streamlit "Approve Answers" page and signs in (Cognito)
   3. Reviews question + extracted answer
   4. Optionally edits the answer text
-  5. Clicks Approve → status set to APPROVED, name + date recorded
+  5. Clicks Approve → status set to APPROVED; approved_by = the verified signed-in
+     identity (no free-text name), date recorded
   6. Audit log captures: who approved, when, before/after text
   7. Agent can now find and return this answer
-  
+
   OR: Reviewer clicks Reject → status: REJECTED (stays for audit trail)
   OR: Reviewer clicks Delete → removed from DB (audit log preserves record)
+```
+
+### Pattern 10: Incoming A2A Request
+```
+Another agent discovers + calls this one
+  1. GET  {api}/{cognito|entra}/.well-known/agent-card.json  (public) → capabilities + auth scheme
+  2. Caller obtains a bearer token from its IdP (Cognito client_credentials, or Entra)
+  3. POST {api}/{prefix}/rpc  with  Authorization: Bearer <jwt>
+  4. API Gateway JWT authorizer validates issuer + audience/client_id BEFORE Lambda runs
+  5. Bridge Lambda maps JSON-RPC → InvokeAgentRuntime, wraps the result as an A2A Task
+  6. Task is stored (24h TTL) so tasks/get / tasks/resubscribe work afterwards
+  method=message/send → JSON ; method=message/stream → buffered text/event-stream
 ```
 
 ## Design Principles
@@ -216,9 +234,12 @@ Document uploaded to S3
 | AgentCore Memory | Cross-session org context | 90-day retention | Per-operation |
 | S3 Bucket (SCF data) | Source text files for KB | No limit | Storage + requests |
 | S3 Bucket (Uploads) | Questionnaire documents for OCR | No limit | Storage + requests |
-| ECR | Agent container images | No limit | Storage |
+| ECR (agent / frontend) | Container images | No limit | Storage |
 | MCP Gateway + Web Search | Live internet access | 200 char query | Per-search |
-| Bedrock Guardrail | Content filtering (topic, PII) | N/A | Per-invocation |
+| Bedrock Guardrail | Prompt-attack + PII + harmful-security filtering | N/A | Per-invocation |
+| A2A HTTP API + bridge Lambda | Incoming A2A (JSON-RPC) with Cognito/Entra JWT auth | 30s API GW integration timeout | Per-request |
+| A2A task store (DynamoDB) | Completed A2A tasks for `tasks/get` | 24h TTL | Per-request |
+| Frontend (Fargate + ALB + CloudFront) | Hosted Streamlit UI, Cognito login | WebSocket via CloudFront | ALB + task always-on (~$25-35/mo) |
 | Lambda (Auto-updater) | Weekly SCF version check | 5-min timeout | Per-invocation |
 | Lambda (Textract pipeline) | OCR extraction from uploads | 15-min timeout | Per-invocation |
 | Lambda (Audit logger) | DynamoDB Stream processor | 1-min timeout | Per-invocation |
@@ -232,25 +253,42 @@ Document uploaded to S3
 
 ```mermaid
 graph LR
-    User["User"] -->|"AWS IAM SigV4"| Runtime["AgentCore Runtime"]
+    IAM["AWS principal<br/>(CLI / scripts)"] -->|"IAM SigV4"| Runtime["AgentCore Runtime"]
+    UI["Browser"] -->|"HTTPS + Cognito OIDC"| CF["CloudFront → ALB → Fargate<br/>(Streamlit, fail-closed login)"] -->|"InvokeAgentRuntime"| Runtime
+    Agent["Other agent"] -->|"Bearer JWT (A2A)"| APIGW["API Gateway HTTP API"]
+    APIGW -->|"Cognito / Entra ID<br/>JWT authorizer"| Bridge["A2A Bridge Lambda"] -->|"InvokeAgentRuntime"| Runtime
+
     Runtime -->|"execution_role"| Role["IAM Role"]
-    
-    Role -->|"bedrock:InvokeModel"| Model["Claude Sonnet 4.6"]
-    Role -->|"dynamodb:GetItem/Query"| DDB["DynamoDB<br/>(read-only)"]
+    Runtime -->|"guardrailConfig"| GR["Bedrock Guardrail<br/>prompt-attack · PII · harmful-security"]
+    Role -->|"bedrock:InvokeModel + ApplyGuardrail"| Model["Claude Sonnet 4.6"]
+    Role -->|"dynamodb:GetItem/Query"| DDB["DynamoDB<br/>(read-only from the agent)"]
     Role -->|"bedrock:Retrieve"| KB["Knowledge Base"]
     Role -->|"bedrock-agentcore:InvokeGateway"| GW["MCP Gateway"]
     GW -->|"SigV4 MCP"| WS["Web Search<br/>(stays within AWS)"]
 
     style Runtime fill:#ff9900,color:#fff
     style Role fill:#dd3522,color:#fff
+    style APIGW fill:#c925d1,color:#fff
+    style Bridge fill:#c925d1,color:#fff
 ```
 
-- All access is IAM-authenticated (no API keys, no OAuth)
-- Agent runtime role has least-privilege per-resource policies
-- DynamoDB is read-only from the agent (no writes)
+- **Three ingress paths, three auth models:**
+  - direct `InvokeAgentRuntime` — AWS IAM / SigV4 (no API keys, no OAuth on this path)
+  - hosted Streamlit UI — Cognito OIDC login (`auth.py` `require_login()`, fails closed);
+    CloudFront injects a secret `X-Origin-Verify` header and the ALB 403s anything without it
+  - A2A ingress — OAuth2 / OIDC bearer JWT (Amazon Cognito or Microsoft Entra ID),
+    validated by a native API Gateway JWT authorizer *before* the bridge Lambda runs
+- Agent runtime role has least-privilege per-resource policies; the A2A bridge and the
+  frontend task each have their own minimal roles (`InvokeAgentRuntime` + the one table
+  they touch)
+- The runtime applies a Bedrock Guardrail on every model call. **Bedrock topic policies
+  are evaluated against the model OUTPUT as well as the input** — a broad "off-topic" DENY
+  topic was removed because the classifier blocked the agent's own on-topic answers; the
+  guardrail keeps PROMPT_ATTACK, PII, and a narrow harmful-security topic
+- DynamoDB is read-only *from the agent*; the approval UI and the A2A task store write to
+  their own tables
 - Memory is scoped to the agent's memory ID
-- Web search goes through SigV4-signed MCP calls to the gateway
-- Web search queries stay within AWS infrastructure (never leave to third-party)
+- Web search goes through SigV4-signed MCP calls to the gateway and stays within AWS
 
 ## Known Limitations
 
@@ -258,8 +296,12 @@ graph LR
 |-----------|-------|------------|
 | KB has only ~7 controls indexed | S3 Vectors 2048-byte metadata limit | DynamoDB has full data; KB provides semantic hints, DynamoDB provides details |
 | Long responses can timeout | AgentCore ~60s response buffer | System prompt limits to 4000 tokens; progressive delivery in conversation |
-| ARM64 container builds are slow | QEMU emulation on x86 | Use pre-downloaded wheels; future: CI/CD on native ARM64 |
-| AgentCore Gateway target provider bug | AWS provider 6.56 issue | `terraform apply -refresh-only` after first apply |
+| ARM64 container builds are slow | QEMU emulation on x86 | Use `--only-binary` wheels; future: CI/CD on native ARM64 |
+| ARM64 builds silently produce a **stale** image | QEMU `binfmt` handlers not registered → cross-arch `RUN` steps fail with `exec /bin/sh: exec format error`, or a cached build is reused | `docker run --privileged --rm tonistiigi/binfmt --install arm64`, then rebuild `--no-cache`; verify the image content before rolling |
+| Streamlit can't run on AWS App Runner | App Runner has no WebSocket support | Frontend runs on Fargate + ALB + CloudFront instead (`terraform/frontend.tf`) |
+| A2A `message/send` can exceed 30s | API Gateway HTTP API integration timeout is a hard 30s | Keep queries scoped; long work should use `tasks/get` polling (future: async task model) |
+| Bedrock topic policies block valid output | Topic DENY rules are applied to the model response, not just the prompt | Keep topic rules narrow (harmful only); do off-topic filtering in app code / system prompt |
+| AgentCore Gateway target provider bug | Provider omits the `credential_provider_configuration` the API always returns | Declare `credential_provider_configuration { gateway_iam_role {} }` in the resource (done in `main.tf`) |
 | Model must use inference profile ID | Bedrock on-demand requirement | Use `us.anthropic.*` not `anthropic.*`; run preflight.py to validate |
 | Web Search connector requires console setup | CLI doesn't support connector targets | Add via AWS Console → Gateway → Add Target → Web Search |
 | Web search returns errors if gateway not configured | Connector not added | Falls back gracefully with reference URLs to authoritative sources |

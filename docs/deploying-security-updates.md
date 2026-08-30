@@ -87,8 +87,27 @@ To build, push, **and** roll the runtime in one step, add `-UpdateRuntime`
 ```
 
 > **Cross-platform build note:** on an x86 machine the ARM64 build uses QEMU.
-> See `deployment-decisions.md` for why the Dockerfile uses `--only-binary` to
-> keep this to ~2.5 minutes instead of 12+.
+> Register the emulation handlers **once per machine** first, or `RUN` steps fail
+> with `exec /bin/sh: exec format error` — and a cached build can silently reuse
+> the old image so the "successful" push changes nothing:
+>
+> ```powershell
+> docker run --privileged --rm tonistiigi/binfmt --install arm64
+> docker run --rm --platform linux/arm64 arm64v8/busybox uname -m   # -> aarch64
+> ```
+>
+> After a real code change, build `--no-cache` and confirm the new code is in the
+> image before rolling:
+>
+> ```powershell
+> docker build --no-cache --platform linux/arm64 -t (terraform -chdir=..\terraform output -raw ecr_repository_url):latest ..\agent
+> $cid = docker create --platform linux/arm64 (terraform -chdir=..\terraform output -raw ecr_repository_url):latest
+> docker cp "${cid}:/app/main.py" .\_check.py ; docker rm $cid
+> Select-String .\_check.py -Pattern "GUARDRAIL_ID"   # expect a match; then remove _check.py
+> ```
+>
+> `--only-binary` in the Dockerfile keeps QEMU from compiling native extensions
+> (~2-3 min instead of 12+). See `deployment-decisions.md`.
 
 ## Step 3 — Verify the guardrail env vars are set (optional but recommended)
 
@@ -184,10 +203,20 @@ refused**. If any `SEC:` test fails, the summary points you back to
 A clean run means the guardrail is genuinely intercepting attacks end-to-end —
 this is the verification the wiring in Steps 1–4 was for.
 
-## Step 6 — Frontend authentication (local; no cloud deploy)
+## Step 6 — Frontend authentication
 
-The Streamlit frontend runs locally and needs OIDC login configured once. It
-fails closed — no login config means no page content.
+The Streamlit frontend fails closed — with no OIDC login configured it renders no
+page content. Both the app-level gate (`auth.py` `require_login()`) and the
+approver-identity change apply whether you run it locally or hosted.
+
+**Hosted (default):** `terraform apply` provisions the frontend on ECS Fargate +
+ALB + CloudFront with its own Cognito client and SSM-backed secrets — no
+`secrets.toml` to manage. First-time deploy (image bootstrap + the two-phase
+`frontend_base_url` step) and user creation are in
+[`frontend-deployment.md`](frontend-deployment.md). Nothing extra to do in this
+runbook once `terraform apply` has run.
+
+**Local run (optional):**
 
 ```powershell
 cd ..\frontend

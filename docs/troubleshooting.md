@@ -65,15 +65,39 @@ Container image is amd64 (x86). AgentCore requires ARM64.
 # Fix: build for ARM64
 docker buildx build --platform linux/arm64 -t <ecr-url>:latest --push .
 
-# If QEMU not set up:
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+# Register the QEMU emulation handlers first (see next entry)
+docker run --privileged --rm tonistiigi/binfmt --install arm64
 ```
 
-**Speed tip:** Use pre-downloaded ARM64 wheels in the Dockerfile to avoid QEMU pip compilation:
-```dockerfile
-COPY wheels/ /tmp/wheels/
-RUN pip install --no-cache-dir --no-index --find-links=/tmp/wheels/ strands-agents boto3
+### Cross-arch build "succeeds" but the runtime still runs old code
+
+Symptoms: `agent/build-and-push.ps1` exits 0, `docker push` says *"Layer already
+exists"* / the digest never changes, and the deployed agent behaves like the
+previous image (e.g. a new env var / prompt / guardrail has no effect).
+
+Cause: on an x86 host, `docker build --platform linux/arm64` needs QEMU `binfmt`
+handlers. If they aren't registered, a `RUN` step fails with
+`exec /bin/sh: exec format error` — and depending on cache state the build can
+reuse the last good image instead of failing loudly.
+
+Fix:
+```powershell
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+# verify:
+docker run --rm --platform linux/arm64 arm64v8/busybox uname -m   # -> aarch64
+
+# then rebuild WITHOUT cache and verify the content before rolling
+docker build --no-cache --platform linux/arm64 -t <ecr-url>:latest agent/
+$cid = docker create --platform linux/arm64 <ecr-url>:latest
+docker cp "${cid}:/app/main.py" ./_check.py ; docker rm $cid
+Select-String -Path ./_check.py -Pattern "GUARDRAIL_ID"   # expect a hit
+docker push <ecr-url>:latest
+.\update-runtime.ps1 -Region us-east-1
 ```
+
+**Speed tip:** `--only-binary=:all:` in the Dockerfile keeps QEMU from compiling
+native extensions (pydantic-core, cryptography), cutting the build from ~12 min to
+~2-3 min.
 
 ### "Runtime initialization time exceeded (30s)"
 
@@ -100,15 +124,65 @@ aws bedrock list-inference-profiles --region us-east-1 --query "inferenceProfile
 
 ### "Provider produced inconsistent result" (Terraform)
 
-Known bug in AWS provider 6.56 with `aws_bedrockagentcore_gateway_target` HTTP targets.
+`aws_bedrockagentcore_gateway_target` HTTP targets: the API always returns a
+`credential_provider_configuration { gateway_iam_role {} }` block; if the config
+doesn't declare one, the provider errors on create and every later `plan` wants to
+remove it.
 
-The resource **was created successfully** — it's a state sync issue.
+**Fix (permanent):** declare the block so config matches the API —
 
-```powershell
-terraform apply -refresh-only -auto-approve
+```hcl
+resource "aws_bedrockagentcore_gateway_target" "compliance_agent" {
+  # ...
+  credential_provider_configuration {
+    gateway_iam_role {}
+  }
+}
 ```
 
-Subsequent applies work cleanly after this.
+This is already in `terraform/main.tf`. If you hit the error on a first apply from
+an older revision, `terraform apply -refresh-only -auto-approve` clears the state
+mismatch, then add the block.
+
+### A2A route returns 401 Unauthorized
+
+| Cause | Fix |
+|---|---|
+| Missing / expired / malformed `Authorization: Bearer` header | Get a fresh token; check `exp` |
+| Token `iss` doesn't match the authorizer | Cognito: `https://cognito-idp.<region>.amazonaws.com/<pool-id>`. Entra v2: `https://login.microsoftonline.com/<tenant>/v2.0` (v1 tokens need `entra_issuer_override`) |
+| Cognito M2M token has no `aud` | Expected — API Gateway matches `client_id` instead; both client IDs are listed as audiences. `terraform apply` again if you rotated a client |
+| Calling `/entra/rpc` but `entra_tenant_id` was never set | That route/authorizer isn't created; set the var and re-apply |
+
+The agent-card routes (`GET .../.well-known/agent-card.json`) are public — a 401
+there means you hit `/rpc` by mistake.
+
+### Hosted frontend: blank page / "loading" skeleton forever
+
+Browser console shows `wss://.../\_stcore/stream failed`. Streamlit needs a
+WebSocket.
+
+- **AWS App Runner cannot host this** — it has no WebSocket support. The frontend
+  runs on Fargate + ALB + CloudFront (`terraform/frontend.tf`).
+- On the Fargate stack: check the ALB target group is `healthy` and CloudFront's
+  origin request policy is `Managed-AllViewer` (so the `Upgrade`/`Connection`
+  headers reach the task).
+- `403 "Direct access is not allowed"` = you hit the ALB directly; use
+  `terraform output -raw frontend_url` (CloudFront).
+
+### Agent refuses every question ("I cannot provide that type of response")
+
+The Bedrock Guardrail is over-blocking. Bedrock **topic policies are evaluated
+against the model output, not just the input**, so a broad "off-topic" DENY topic
+flags the agent's own on-topic answers.
+
+- Keep topic rules narrow (harmful/abuse only). Off-topic filtering belongs in
+  `_validate_input()` + the system prompt.
+- After editing `terraform/guardrails.tf`, a **new guardrail version** must be cut
+  and the runtime env `GUARDRAIL_VERSION` bumped — the `replace_triggered_by` on
+  `aws_bedrock_guardrail_version` handles this on `terraform apply`.
+- Inspect what tripped: run the container with `LOG_LEVEL=DEBUG` and look for
+  `topicPolicy` / `contentPolicy` / `assessment` with `"action":"BLOCKED"` in the
+  guardrail trace.
 
 ### "Invalid Attribute Value Match" (Terraform naming)
 

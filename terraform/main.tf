@@ -499,7 +499,11 @@ resource "aws_bedrockagentcore_agent_runtime" "compliance_agent" {
   }
 
   lifecycle_configuration {
-    idle_runtime_session_timeout = 300
+    # 900s idle keeps sessions warm across long gap-analysis / report queries.
+    idle_runtime_session_timeout = 900
+    # The API always returns its ceiling here; declare it so `terraform plan`
+    # stays quiet (it cannot actually be unset).
+    max_lifetime = 28800
   }
 
   protocol_configuration {
@@ -617,5 +621,13 @@ resource "aws_bedrockagentcore_gateway_target" "compliance_agent" {
         qualifier = "DEFAULT"
       }
     }
+  }
+
+  # The API always returns this block for an agentcore_runtime target (it uses the
+  # gateway's own IAM role). Declaring it to match keeps `terraform plan` quiet;
+  # omitting it produced a perpetual "remove credential_provider_configuration"
+  # diff and, on first create, a "provider produced inconsistent result" error.
+  credential_provider_configuration {
+    gateway_iam_role {}
   }
 }

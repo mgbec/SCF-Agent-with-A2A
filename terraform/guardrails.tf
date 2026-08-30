@@ -42,21 +42,14 @@ resource "aws_bedrock_guardrail" "scf_agent" {
     }
   }
 
-  # Topic policy - keep the agent on-topic
+  # Topic policy - block genuinely harmful requests.
+  #
+  # NOTE: an "off_topic" DENY topic was removed here. Bedrock topic policies are
+  # evaluated against the OUTPUT as well as the input, and the classifier flagged
+  # the agent's own on-topic answers (even "what is control GOV-01?" and its
+  # capability overview) as off-topic, blocking almost every response. Off-topic
+  # misuse is handled by _validate_input() in agent/main.py and the system prompt.
   topic_policy_config {
-    topics_config {
-      name       = "off_topic"
-      definition = "Questions unrelated to cybersecurity, compliance, governance, risk management, security controls, auditing, or regulatory frameworks"
-      type       = "DENY"
-
-      examples = [
-        "Write me a poem about cats",
-        "Help me with my homework",
-        "What's the weather today",
-        "Tell me a joke",
-        "Write code for a video game",
-      ]
-    }
     topics_config {
       name       = "harmful_security"
       definition = "Requests for help with hacking, exploiting vulnerabilities, creating malware, or bypassing security controls"
@@ -98,5 +91,11 @@ resource "aws_bedrock_guardrail" "scf_agent" {
 
 resource "aws_bedrock_guardrail_version" "scf_agent" {
   guardrail_arn = aws_bedrock_guardrail.scf_agent.guardrail_arn
-  description   = "Initial version"
+  description   = "Prompt-attack + PII + harmful-security topic; no broad off-topic block"
+
+  # Cut a fresh immutable version whenever the guardrail definition changes, so
+  # GUARDRAIL_VERSION on the agent runtime always tracks the current config.
+  lifecycle {
+    replace_triggered_by = [aws_bedrock_guardrail.scf_agent]
+  }
 }

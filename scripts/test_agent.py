@@ -24,6 +24,14 @@ import tempfile
 
 import boto3
 
+# The report uses box-drawing / emoji; force UTF-8 so it prints on a Windows
+# console (cp1252) instead of raising UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 
 def get_terraform_output(key: str) -> str:
     """Get a value from terraform outputs."""

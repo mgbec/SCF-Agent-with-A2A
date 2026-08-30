@@ -1,14 +1,64 @@
 # Frontend Deployment Guide
 
+## Authentication overview
+
+The frontend is protected at two layers, and you can use either or both:
+
+1. **Application-level login (built in).** `app.py` and the approval page call
+   `require_login()` from `auth.py`, which uses Streamlit's native OIDC
+   (`st.login` / `st.user`). Pages render nothing until the user signs in, and
+   the app fails closed if login isn't configured. This works for local
+   development and any hosting model. Configure it via
+   `.streamlit/secrets.toml` (see below).
+2. **Infrastructure-level auth (production).** When deploying on AWS, an
+   ALB `authenticate-cognito` action (or Lambda@Edge) fronts the container so
+   unauthenticated requests never reach Streamlit at all. See the production
+   section below.
+
+For a hardened deployment, use both: infrastructure auth as the outer gate and
+the built-in login as defense in depth. At minimum, never run the frontend
+without the application-level login enabled — the approval queue controls what
+answers the agent trusts.
+
 ## Local Development
 
 ```powershell
 cd frontend
 pip install -r requirements.txt
+
+# One-time: configure OIDC login
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+# Edit .streamlit/secrets.toml — fill in client_id, client_secret,
+# server_metadata_url, redirect_uri, and a generated cookie_secret:
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
+
 streamlit run app.py
 ```
 
-Opens at `http://localhost:8501`. Uses your local AWS credentials automatically.
+Opens at `http://localhost:8501`. Uses your local AWS credentials automatically
+for agent invocation. You'll be prompted to sign in before any page loads.
+
+### Configuring login with the existing Cognito pool
+
+The project already defines a Cognito user pool in
+[`terraform/cognito-a2a.tf`](../terraform/cognito-a2a.tf) (`enable_a2a = true`).
+Its `a2a_web` client uses the authorization-code flow and is a good template.
+For the Streamlit frontend, point `.streamlit/secrets.toml` at a web app client
+that has:
+
+- `allowed_oauth_flows = ["code"]`
+- scopes including `openid` and `email`
+- `http://localhost:8501/oauth2callback` in its `callback_urls` (add your
+  production URL for deployed environments)
+
+Then set `server_metadata_url` to:
+
+```
+https://cognito-idp.<region>.amazonaws.com/<user-pool-id>/.well-known/openid-configuration
+```
+
+`.streamlit/secrets.toml` holds the client secret and is git-ignored — commit
+only `.streamlit/secrets.toml.example`.
 
 ## Production Deployment on AWS (Cognito + CloudFront + ECS)
 
@@ -87,7 +137,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py .
+# Copy the app, shared auth helper, sub-pages, and Streamlit config.
+# Do NOT bake secrets.toml into the image — inject it at runtime
+# (mounted volume or secrets manager) so the client secret stays out of the image.
+COPY app.py auth.py ./
+COPY pages/ ./pages/
+COPY .streamlit/config.toml ./.streamlit/config.toml
 
 EXPOSE 8501
 
@@ -279,6 +334,9 @@ resource "aws_lb_listener_rule" "cognito_auth" {
 
 ### Security Checklist
 
+- [ ] Application-level login enabled (`.streamlit/secrets.toml` present; app fails closed without it)
+- [ ] `secrets.toml` injected at runtime, not baked into the container image
+- [ ] Approvals attributed to the verified signed-in identity (no free-text names)
 - [ ] Cognito user pool with strong password policy + MFA
 - [ ] HTTPS everywhere (CloudFront → ALB can be HTTP if internal)
 - [ ] ECS task role scoped to only `InvokeAgentRuntime` on the specific agent ARN

@@ -360,6 +360,14 @@ resource "aws_iam_role_policy" "agentcore_bedrock" {
         ]
       },
       {
+        Sid    = "ApplyGuardrail"
+        Effect = "Allow"
+        Action = [
+          "bedrock:ApplyGuardrail"
+        ]
+        Resource = aws_bedrock_guardrail.scf_agent.guardrail_arn
+      },
+      {
         Sid    = "KnowledgeBaseRetrieval"
         Effect = "Allow"
         Action = [
@@ -476,6 +484,10 @@ resource "aws_bedrockagentcore_agent_runtime" "compliance_agent" {
     BEDROCK_MODEL_ID  = var.bedrock_model_id
     AWS_REGION        = local.region
     LOG_LEVEL         = var.log_level
+    # Bedrock Guardrail (prompt-attack / content / PII filtering). The agent
+    # applies these on every model call — see agent/main.py.
+    GUARDRAIL_ID      = aws_bedrock_guardrail.scf_agent.guardrail_id
+    GUARDRAIL_VERSION = aws_bedrock_guardrail_version.scf_agent.version
   }
 
   network_configuration {

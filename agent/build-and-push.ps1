@@ -3,7 +3,9 @@
 
 param(
     [string]$Region = "us-east-1",
-    [string]$Tag = "latest"
+    [string]$Tag = "latest",
+    # Roll the AgentCore runtime onto the new image after pushing.
+    [switch]$UpdateRuntime
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,4 +33,13 @@ Write-Host "`nPushing to ECR..."
 docker push "${ECR_URL}:${Tag}"
 
 Write-Host "`nDone! Image pushed to: ${ECR_URL}:${Tag}"
-Write-Host "You may need to update the AgentCore runtime to pick up the new image."
+
+if ($UpdateRuntime) {
+    Write-Host "`nRolling the AgentCore runtime onto the new image..."
+    & "$PSScriptRoot\update-runtime.ps1" -Region $Region -Tag $Tag
+} else {
+    Write-Host "The runtime still points at the previously deployed image (tag is mutable)."
+    Write-Host "Roll it onto this image with:"
+    Write-Host "  .\update-runtime.ps1 -Region $Region -Tag $Tag"
+    Write-Host "Or re-run this script with -UpdateRuntime to do both in one step."
+}

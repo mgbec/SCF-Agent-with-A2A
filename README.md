@@ -65,6 +65,8 @@ For architecture details, see [docs/architecture-guidelines.md](docs/architectur
 
 For vector store upgrade options and evaluation guidance, see [docs/vector-store-options.md](docs/vector-store-options.md).
 
+To deploy the security hardening (Bedrock Guardrail wiring, untrusted-content handling, frontend auth, security tests), follow the step-by-step [docs/deploying-security-updates.md](docs/deploying-security-updates.md) runbook.
+
 ### Auto-Update Pipeline
 
 The SCF data stays current via a serverless pipeline:
@@ -145,19 +147,38 @@ Extracted Q&A pairs are stored as `DRAFT` status and must be approved before the
 
 ### Approval Workflow
 
+The frontend requires login before any page renders. Configure authentication
+once, then run it:
+
 ```powershell
-# Run the frontend
 cd frontend
+
+# One-time: configure OIDC login (uses Streamlit's built-in auth)
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+# Edit .streamlit/secrets.toml with your OIDC provider details.
+# Generate a cookie secret:
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Navigate to **✅ Approve Answers** in the sidebar to:
+Sign in when prompted, then navigate to **✅ Approve Answers** in the sidebar to:
 - View all DRAFT answers extracted from uploaded documents
 - Edit answer text before approving
 - Approve (sets status, records who/when) or Reject
 - See summary metrics (total, approved, draft, rejected)
 
-The agent only surfaces `APPROVED` answers when responding to queries.
+The agent only surfaces `APPROVED` answers when responding to queries. The
+approver recorded in the audit trail is the verified signed-in identity — there
+is no free-text name entry.
+
+> **Security note:** Both the chat and approval pages fail closed. If auth isn't
+> configured (`.streamlit/secrets.toml` missing), the app refuses to render any
+> content. The approval queue is the trust gate for what the agent surfaces, so
+> it must never be exposed without login. See
+> [docs/frontend-deployment.md](docs/frontend-deployment.md) for provider setup
+> and production hardening.
 
 ### Audit Trail
 

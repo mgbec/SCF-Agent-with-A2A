@@ -71,9 +71,9 @@ variable "cognito_a2a_domain_prefix" {
 }
 
 variable "cognito_a2a_web_callback_urls" {
-  description = "Allowed callback/logout URLs for the interactive (authorization_code) Cognito app client"
+  description = "Allowed callback/logout URLs for the interactive (authorization_code) Cognito app client. The default covers the local Streamlit frontend: Streamlit's OIDC redirect path is fixed at /oauth2callback (login), and st.logout returns to the app root."
   type        = list(string)
-  default     = ["http://localhost:8501/"]
+  default     = ["http://localhost:8501/oauth2callback", "http://localhost:8501/"]
 }
 
 variable "entra_tenant_id" {

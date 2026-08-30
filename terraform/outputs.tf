@@ -62,6 +62,16 @@ output "guardrail_id" {
   value       = aws_bedrock_guardrail.scf_agent.guardrail_id
 }
 
+output "guardrail_version" {
+  description = "Bedrock Guardrail version applied by the agent runtime"
+  value       = aws_bedrock_guardrail_version.scf_agent.version
+}
+
+output "deploy_operator_policy_arn" {
+  description = "Attach this managed policy to the IAM user/role that runs the deploy scripts (build-and-push.ps1 / update-runtime.ps1)"
+  value       = aws_iam_policy.deploy_operator.arn
+}
+
 ################################################################################
 # A2A (Agent-to-Agent) ingress
 ################################################################################

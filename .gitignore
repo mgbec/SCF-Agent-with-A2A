@@ -35,3 +35,12 @@ Thumbs.db
 .env
 *.pem
 *.key
+**/.streamlit/secrets.toml
+secrets.toml
+
+# Runtime logs & response dumps (may leak account IDs, ARNs, prompts)
+logs.txt
+logs2.txt
+errs.txt
+*.log
+*.bin

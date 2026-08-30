@@ -6,10 +6,16 @@ Approved answers become available to the agent for reuse.
 """
 
 import json
+import os
+import sys
 from datetime import datetime
 
 import boto3
 import streamlit as st
+
+# Allow importing the shared auth helper from the frontend root
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from auth import current_user_label, render_logout_sidebar, require_login
 
 REGION = "us-east-1"
 ANSWERS_TABLE = "scf-agent-approved-answers"
@@ -65,6 +71,14 @@ def delete_answer(answer_id: str):
 # --- Page UI ---
 
 st.set_page_config(page_title="Approve Answers", page_icon="✅", layout="wide")
+
+# Require authentication before rendering any content
+require_login()
+render_logout_sidebar()
+
+# The approver is the verified signed-in identity, not free-text
+approver_name = current_user_label()
+
 st.title("✅ Answer Approval Queue")
 st.caption("Review and approve extracted questionnaire answers before they become available to the agent.")
 
@@ -72,10 +86,7 @@ st.caption("Review and approve extracted questionnaire answers before they becom
 with st.sidebar:
     st.header("Filters")
     status_filter = st.selectbox("Status", ["DRAFT", "APPROVED", "REJECTED", "ALL"], index=0)
-    
-    st.header("Bulk Actions")
-    approver_name = st.text_input("Your name (for approval)", value="")
-    
+
     if st.button("🔄 Refresh"):
         st.cache_data.clear()
         st.rerun()
@@ -131,18 +142,15 @@ for i, answer in enumerate(answers):
         
         with btn_col1:
             if st.button("✅ Approve", key=f"approve_{answer['answer_id']}", type="primary"):
-                if not approver_name:
-                    st.error("Enter your name in the sidebar first.")
-                else:
-                    updates = {
-                        "status": "APPROVED",
-                        "approved_by": approver_name,
-                        "approved_date": datetime.utcnow().strftime("%Y-%m-%d"),
-                        "answer_text": edited_answer,
-                    }
-                    update_answer(answer["answer_id"], updates)
-                    st.success(f"Approved by {approver_name}")
-                    st.rerun()
+                updates = {
+                    "status": "APPROVED",
+                    "approved_by": approver_name,
+                    "approved_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                    "answer_text": edited_answer,
+                }
+                update_answer(answer["answer_id"], updates)
+                st.success(f"Approved by {approver_name}")
+                st.rerun()
         
         with btn_col2:
             if st.button("💾 Save Edit", key=f"save_{answer['answer_id']}"):
@@ -154,7 +162,7 @@ for i, answer in enumerate(answers):
             if st.button("❌ Reject", key=f"reject_{answer['answer_id']}"):
                 update_answer(answer["answer_id"], {
                     "status": "REJECTED",
-                    "approved_by": approver_name or "unknown",
+                    "approved_by": approver_name,
                 })
                 st.warning("Rejected")
                 st.rerun()

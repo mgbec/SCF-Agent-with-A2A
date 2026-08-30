@@ -19,6 +19,8 @@ from datetime import datetime
 import boto3
 import streamlit as st
 
+from auth import render_logout_sidebar, require_login
+
 # Configuration
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 AGENT_ARN = os.environ.get("SCF_AGENT_ARN", "")
@@ -102,6 +104,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Require authentication before rendering any content
+require_login()
+render_logout_sidebar()
 
 # Override the default page name in sidebar navigation
 st.html("<style>[data-testid='stSidebarNav'] li:first-child a span {visibility:hidden; position:relative;} [data-testid='stSidebarNav'] li:first-child a span::after {content:'💬 Chat'; visibility:visible; position:absolute; left:0;}</style>")

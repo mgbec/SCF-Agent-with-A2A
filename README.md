@@ -147,8 +147,14 @@ Extracted Q&A pairs are stored as `DRAFT` status and must be approved before the
 
 ### Approval Workflow
 
-The frontend requires login before any page renders. Configure authentication
-once, then run it:
+The frontend is **hosted on AWS App Runner** (`terraform/frontend.tf`) — get the
+URL with `terraform output -raw frontend_url` and sign in with a Cognito user
+(`aws cognito-idp admin-create-user ...`). First-time deploy and the two-phase
+`frontend_base_url` step are in
+[docs/frontend-deployment.md](docs/frontend-deployment.md#deployed-aws-app-runner-this-is-what-terraform-apply-provisions).
+
+To run it locally instead — the frontend still requires login before any page
+renders; configure authentication once, then run it:
 
 ```powershell
 cd frontend

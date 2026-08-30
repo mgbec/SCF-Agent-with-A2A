@@ -9,11 +9,10 @@ Usage:
     streamlit run app.py
 """
 
-import base64
 import json
 import os
 import subprocess
-import tempfile
+import uuid
 from datetime import datetime
 
 import boto3
@@ -24,6 +23,13 @@ from auth import render_logout_sidebar, require_login
 # Configuration
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 AGENT_ARN = os.environ.get("SCF_AGENT_ARN", "")
+
+_agentcore = boto3.client("bedrock-agentcore", region_name=REGION)
+
+
+def _new_session_id() -> str:
+    """A runtimeSessionId AgentCore accepts (>=33 chars of [A-Za-z0-9_-])."""
+    return f"web-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex}"
 
 
 @st.cache_data
@@ -47,53 +53,44 @@ def get_agent_arn():
 
 
 def invoke_agent(prompt: str, session_id: str) -> str:
-    """Call the AgentCore runtime and return the response."""
+    """Call the AgentCore runtime via boto3 and return the response text."""
     arn = get_agent_arn()
     if not arn:
-        return "⚠️ Agent ARN not configured. Set SCF_AGENT_ARN environment variable or run from the project directory."
+        return "⚠️ Agent ARN not configured. Set the SCF_AGENT_ARN environment variable or run from the project directory."
 
-    payload_b64 = base64.b64encode(
-        json.dumps({"prompt": prompt, "session_id": session_id}).encode()
-    ).decode()
-
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
-        tmp_path = tmp.name
+    if len(session_id) < 33:
+        session_id = _new_session_id()
 
     try:
-        result = subprocess.run(
-            [
-                "aws", "bedrock-agentcore", "invoke-agent-runtime",
-                "--agent-runtime-arn", arn,
-                "--payload", payload_b64,
-                "--region", REGION,
-                tmp_path,
-            ],
-            capture_output=True, text=True, timeout=300,
+        resp = _agentcore.invoke_agent_runtime(
+            agentRuntimeArn=arn,
+            runtimeSessionId=session_id,
+            qualifier="DEFAULT",
+            contentType="application/json",
+            accept="application/json",
+            payload=json.dumps({"prompt": prompt, "session_id": session_id}).encode("utf-8"),
         )
+    except Exception as e:  # noqa: BLE001 - surface any boto/runtime error to the user
+        msg = str(e)
+        if "RuntimeClientError" in msg or "424" in msg:
+            return "⚠️ The agent returned an error. The query may be too complex — try breaking it into smaller questions."
+        return f"⚠️ Error invoking agent: {msg[:300]}"
 
-        if result.returncode != 0:
-            error = result.stderr.strip()
-            if "RuntimeClientError" in error:
-                return "⚠️ The agent returned an error. The query may be too complex — try breaking it into smaller questions."
-            return f"⚠️ Error: {error[:300]}"
-
-        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
-            with open(tmp_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            try:
-                data = json.loads(content)
-                return data.get("response", content)
-            except json.JSONDecodeError:
-                return content
-
+    body = resp.get("response")
+    if hasattr(body, "read"):
+        body = body.read()
+    if isinstance(body, (bytes, bytearray)):
+        body = body.decode("utf-8", errors="replace")
+    if not body:
         return "Agent completed but returned no response body."
-    except subprocess.TimeoutExpired:
-        return "⚠️ Request timed out (5 min). Try a simpler question."
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return body
+    if isinstance(data, dict):
+        return data.get("response") or data.get("output") or data.get("message") or body
+    return str(data)
 
 
 # --- Streamlit UI ---
@@ -146,7 +143,7 @@ with st.sidebar:
 
     if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
-        st.session_state.session_id = f"web-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        st.session_state.session_id = _new_session_id()
         st.rerun()
 
     if st.button("💾 Export Chat as Report"):
@@ -167,7 +164,7 @@ with st.sidebar:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "session_id" not in st.session_state:
-    st.session_state.session_id = f"web-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    st.session_state.session_id = _new_session_id()
 
 # Display chat history
 for message in st.session_state.messages:

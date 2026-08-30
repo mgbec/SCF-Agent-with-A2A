@@ -136,3 +136,22 @@ output "cognito_a2a_web_client_id" {
   description = "Client ID of the interactive (authorization_code / hosted UI) Cognito app client"
   value       = local.a2a_enabled ? aws_cognito_user_pool_client.a2a_web[0].id : null
 }
+
+################################################################################
+# Streamlit frontend (App Runner)
+################################################################################
+
+output "frontend_url" {
+  description = "Public HTTPS URL of the hosted Streamlit frontend (CloudFront)"
+  value       = local.frontend_enabled ? "https://${aws_cloudfront_distribution.frontend[0].domain_name}" : null
+}
+
+output "frontend_ecr_repository_url" {
+  description = "ECR repository URL for the frontend container image"
+  value       = local.frontend_enabled ? aws_ecr_repository.frontend[0].repository_url : null
+}
+
+output "frontend_cognito_client_id" {
+  description = "Cognito app client ID used by the frontend's OIDC login"
+  value       = local.frontend_enabled ? aws_cognito_user_pool_client.frontend[0].id : null
+}

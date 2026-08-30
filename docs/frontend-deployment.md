@@ -60,9 +60,110 @@ https://cognito-idp.<region>.amazonaws.com/<user-pool-id>/.well-known/openid-con
 `.streamlit/secrets.toml` holds the client secret and is git-ignored — commit
 only `.streamlit/secrets.toml.example`.
 
-## Production Deployment on AWS (Cognito + CloudFront + ECS)
+## Deployed: ECS Fargate + ALB + CloudFront (this is what `terraform apply` provisions)
 
-This guide deploys the Streamlit frontend as a secure web application with:
+`terraform/frontend.tf` hosts the frontend on **ECS Fargate behind an ALB, with
+CloudFront in front**:
+
+```
+Browser --HTTPS/WSS--> CloudFront (*.cloudfront.net) --HTTP--> ALB --> Fargate task (Streamlit :8501)
+```
+
+CloudFront supplies a free HTTPS `*.cloudfront.net` domain and, crucially,
+forwards the WebSocket (`/_stcore/stream`) that Streamlit needs — **AWS App Runner
+does not support WebSockets**, so it cannot host Streamlit. No ACM certificate or
+custom domain is required. Direct ALB access is refused: CloudFront injects a
+secret `X-Origin-Verify` header and the ALB listener returns 403 without it; the
+ALB security group only accepts the CloudFront edge prefix list.
+
+Auth is the application-level `st.login` gate (`frontend/auth.py`) backed by a
+dedicated confidential Cognito app client (`aws_cognito_user_pool_client.frontend`)
+on the same user pool as the A2A routes. `client_secret` and a generated
+`cookie_secret` are SSM SecureString parameters, injected as ECS container
+`secrets`; `frontend/entrypoint.sh` assembles `.streamlit/secrets.toml` from the
+environment at container start. The ECS **task role** is scoped to exactly
+`bedrock-agentcore:InvokeAgentRuntime` on the runtime and read/write on the
+`approved-answers` DynamoDB table; the **execution role** only pulls the image and
+the two SSM secrets.
+
+The service runs in the **default VPC** public subnets with a public IP (to pull
+the image and reach Bedrock without a NAT gateway).
+
+### First deploy (bootstrap + two-phase)
+
+The image must exist before the ECS service, and CloudFront's domain is only known
+after creation but is needed in the Cognito callback + the container's
+`AUTH_REDIRECT_URI` — so the first deploy is bootstrap + two applies:
+
+```powershell
+cd terraform
+# terraform.tfvars: enable_frontend = true, enable_a2a = true, frontend_base_url = ""
+
+# 1. Create just the ECR repo
+terraform apply -target=aws_ecr_repository.frontend
+
+# 2. Build + push the frontend image (linux/amd64)
+cd ..\frontend
+.\build-and-push.ps1 -Region us-east-1
+cd ..\terraform
+
+# 3. Phase 1 - create the ALB + Fargate service + CloudFront (login not yet functional).
+#    CloudFront takes ~5-10 min to deploy.
+terraform apply
+
+# 4. Phase 2 - feed the real URL back in
+terraform output -raw frontend_url          # -> https://dxxxxxxxxxxxxx.cloudfront.net
+# set frontend_base_url in terraform.tfvars to that value (no trailing slash)
+terraform apply                             # updates the Cognito callback + redeploys the task
+```
+
+After this, a new image goes live by pushing it and forcing a deployment:
+
+```powershell
+cd ..\frontend
+.\build-and-push.ps1 -Region us-east-1
+aws ecs update-service --cluster scf-agent-frontend --service scf-agent-frontend `
+  --force-new-deployment --region us-east-1
+```
+
+Tear down with `enable_frontend = false` + `terraform apply`.
+
+### Add a user
+
+The pool is admin-create-only:
+
+```powershell
+aws cognito-idp admin-create-user `
+  --user-pool-id (terraform output -raw cognito_user_pool_id) `
+  --username you@example.com `
+  --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true `
+  --region us-east-1
+# The temporary password arrives by email; you set a permanent one on first login.
+```
+
+### Cost
+
+Roughly **$25-35/month**: ALB ~$16 + Fargate 0.5 vCPU / 1 GB always-on ~$9 +
+CloudFront (pennies at low traffic). `enable_frontend = false` removes all of it.
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| Page shows only the Streamlit loading skeleton; console: `wss://.../_stcore/stream failed` | The WebSocket isn't reaching the task. Check the ALB target group is healthy and that CloudFront's origin request policy is `Managed-AllViewer` (forwards the `Upgrade`/`Connection` headers). |
+| `403` "Direct access is not allowed" | You hit the ALB directly. Use the CloudFront URL (`terraform output -raw frontend_url`). |
+| ECS task keeps restarting, no app logs | Usually `entrypoint.sh` with CRLF line endings — the Dockerfile normalises with `sed` and runs `bash /app/entrypoint.sh`; rebuild + push + `--force-new-deployment`. Otherwise check `/ecs/scf-agent-frontend` logs. |
+| Login loops back to the sign-in screen | `frontend_base_url` doesn't match the real CloudFront URL, so the Cognito callback / `AUTH_REDIRECT_URI` are wrong. Set it to `terraform output -raw frontend_url` and re-apply (phase 2). |
+| `⚠️ Error invoking agent` in chat | Task role or agent runtime issue — check `/ecs/scf-agent-frontend` logs. |
+
+## Alternative: custom domain instead of CloudFront's
+
+If you own a domain and have an ACM certificate in the ALB's region, you can drop
+CloudFront and put an HTTPS (443) listener with the cert directly on the ALB, then
+point a Route 53 alias at it. The rest of the stack (Fargate, task/exec roles,
+Cognito client, SSM secrets) is unchanged; set `frontend_base_url` to
+`https://<your-domain>`. The section below is a fuller build-out of that pattern
+with Cognito at the ALB as an outer gate:
 - **Cognito** for user authentication (email/password or SSO)
 - **CloudFront** for HTTPS and CDN
 - **ECS Fargate** for hosting the Streamlit app

@@ -1,0 +1,10 @@
+.streamlit/secrets.toml
+.streamlit/secrets.toml.example
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.md
+build-and-push.ps1
+Dockerfile
+.dockerignore

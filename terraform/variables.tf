@@ -99,3 +99,19 @@ variable "a2a_custom_domain" {
   type        = string
   default     = ""
 }
+
+################################################################################
+# Streamlit frontend (App Runner)
+################################################################################
+
+variable "enable_frontend" {
+  description = "Host the Streamlit frontend on AWS App Runner (requires enable_a2a for the Cognito user pool)"
+  type        = bool
+  default     = true
+}
+
+variable "frontend_base_url" {
+  description = "Public https base URL of the App Runner service, no trailing slash (e.g. https://abc123.us-east-1.awsapprunner.com). Leave empty for the first apply, then set it to the frontend_url output and apply again so the Cognito callback and the container's AUTH_REDIRECT_URI match the real URL."
+  type        = string
+  default     = ""
+}

@@ -167,9 +167,13 @@ Extracted Q&A pairs are stored as `DRAFT` status and must be approved before the
 The frontend is **hosted on AWS: ECS Fargate behind an ALB, with CloudFront in front**
 for a free HTTPS `*.cloudfront.net` URL that supports the WebSocket Streamlit needs
 (`terraform/frontend.tf`). Get the URL with `terraform output -raw frontend_url` and
-sign in with a Cognito user (`aws cognito-idp admin-create-user ...`). First-time
-deploy (image bootstrap + the two-phase `frontend_base_url` step) is in
-[docs/frontend-deployment.md](docs/frontend-deployment.md#deployed-ecs-fargate--alb--cloudfront-this-is-what-terraform-apply-provisions).
+sign in with a Cognito user (`aws cognito-idp admin-create-user ...`).
+
+- **End users:** see [docs/user-guide.md](docs/user-guide.md) — where to go, how to
+  get an account, and how to use the Chat and Approve Answers pages.
+- **Deployers:** first-time deploy (image bootstrap + the two-phase `frontend_base_url`
+  step) is in
+  [docs/frontend-deployment.md](docs/frontend-deployment.md#deployed-ecs-fargate--alb--cloudfront-this-is-what-terraform-apply-provisions).
 
 To run it locally instead — the frontend still requires login before any page
 renders; configure authentication once, then run it:
@@ -448,6 +452,7 @@ scf-compliance-agent/
 │   ├── build-and-push.ps1      # Build + push the frontend image (linux/amd64)
 │   └── requirements.txt
 ├── docs/
+│   ├── user-guide.md               # For people using the web app (URL, login, pages)
 │   ├── architecture-guidelines.md
 │   ├── deployment-decisions.md
 │   ├── a2a-integration.md          # A2A auth setup, token recipes, sample calls

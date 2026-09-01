@@ -456,6 +456,7 @@ scf-compliance-agent/
 │   ├── architecture-guidelines.md
 │   ├── deployment-decisions.md
 │   ├── a2a-integration.md          # A2A auth setup, token recipes, sample calls
+│   ├── a2a-streaming.md            # Options + trade-offs for true streaming / lifting the 30s cap
 │   ├── frontend-deployment.md      # Fargate + ALB + CloudFront runbook
 │   ├── deploying-security-updates.md # Guardrail + prompt hardening + frontend auth runbook
 │   ├── troubleshooting.md

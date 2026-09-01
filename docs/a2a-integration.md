@@ -196,17 +196,17 @@ asyncio.run(main())
 
 ## Streaming notes
 
-`message/stream` returns a valid SSE stream, but the frames are **buffered** — API Gateway
-(and the Python managed Lambda runtime) do not flush incrementally, and the underlying
-agent returns its answer in one shot, so there is nothing to deliver token-by-token today.
-Clients that parse `text/event-stream` still work correctly; they just receive all events
-at once when the turn finishes.
+`message/stream` returns a **valid but buffered** SSE response: the bridge runs the agent
+to completion, then emits `working` → `artifact-update` → `completed` in one body. There is
+no incremental delivery and no keep-alive, and the call is still under API Gateway HTTP
+API's hard **30-second** integration timeout — a long query (full gap analysis, multi-step
+report) can `504` on both `message/send` and `message/stream`.
 
-To get true incremental delivery later (e.g. if the agent container starts streaming model
-tokens), put the bridge behind a **Lambda Function URL** with the
-[Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter) and
-`AWS_LWA_INVOKE_MODE=response_stream`, or move it to a custom runtime. The A2A contract
-(same endpoint, method selects JSON vs SSE) does not change.
+This is a deliberate trade-off for a simple, fully-serverless bridge with native dual-IdP
+JWT auth. If you need real incremental streaming or need to lift the 30s ceiling, see
+**[docs/a2a-streaming.md](a2a-streaming.md)** — it lays out the async-task, Lambda Function
+URL + Lambda Web Adapter, and Fargate options with their trade-offs, plus what token-level
+streaming additionally requires from the agent container.
 
 ## Supported / unsupported methods
 

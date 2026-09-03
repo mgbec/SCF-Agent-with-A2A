@@ -5,12 +5,13 @@
 ```mermaid
 graph TD
     subgraph "Ingress"
-        CLI["ask.py / generate_report.py<br/>(IAM SigV4)"]
-        WebUI["Hosted Streamlit UI<br/>CloudFront → ALB → Fargate<br/>(Cognito login)"]
-        A2A["A2A clients<br/>(other agents)"]
+        CLI["ask.py / generate_report.py<br/>IAM SigV4"]
+        WebUI["Hosted Streamlit UI<br/>CloudFront - ALB - Fargate<br/>Cognito login"]
+        A2A["A2A clients - other agents"]
         APIGW["API Gateway HTTP API<br/>Cognito / Entra JWT authorizers"]
         Bridge["A2A Bridge Lambda"]
-        A2A -->|"Bearer JWT"| APIGW --> Bridge
+        A2A -->|"Bearer JWT"| APIGW
+        APIGW --> Bridge
     end
 
     subgraph "AgentCore Runtime (ARM64 Container)"
@@ -44,7 +45,7 @@ graph TD
     subgraph "Data Layer"
         KB["📚 Bedrock KB - S3 Vectors<br/>Trimmed text for semantic search"]
         DDB["🗄️ DynamoDB<br/>Full control data - 1,534 items"]
-        Answers["📋 DynamoDB<br/>Approved Answers - historical Q&A"]
+        Answers["📋 DynamoDB<br/>Approved Answers - historical answers"]
         AuditLog["📝 DynamoDB<br/>Audit Log - change history"]
         MemStore["🧠 AgentCore Memory<br/>Org context - 90 day retention"]
         GW["🌐 MCP Gateway + Web Search Connector"]
@@ -54,13 +55,13 @@ graph TD
         S3["S3 Bucket - 1,535 .txt files"]
         S3Uploads["S3 Bucket - Questionnaire uploads"]
         Updater["⏰ Lambda + EventBridge<br/>Weekly SCF version check"]
-        Textract["📄 Textract Pipeline<br/>OCR → Q&A extraction"]
+        Textract["📄 Textract Pipeline<br/>OCR answer extraction"]
     end
 
     CLI -->|"SigV4"| Agent
     WebUI -->|"InvokeAgentRuntime"| Agent
     Bridge -->|"InvokeAgentRuntime"| Agent
-    Bridge --> A2ATasks["🗄️ DynamoDB<br/>A2A tasks (24h TTL)"]
+    Bridge --> A2ATasks["🗄️ DynamoDB<br/>A2A tasks - 24h TTL"]
 
     Agent --> T1 & T2 & T3 & T4
     Agent --> T5 & T6
@@ -254,18 +255,20 @@ Another agent discovers + calls this one
 
 ```mermaid
 graph LR
-    IAM["AWS principal<br/>(CLI / scripts)"] -->|"IAM SigV4"| Runtime["AgentCore Runtime"]
-    UI["Browser"] -->|"HTTPS + Cognito OIDC"| CF["CloudFront → ALB → Fargate<br/>(Streamlit, fail-closed login)"] -->|"InvokeAgentRuntime"| Runtime
-    Agent["Other agent"] -->|"Bearer JWT (A2A)"| APIGW["API Gateway HTTP API"]
-    APIGW -->|"Cognito / Entra ID<br/>JWT authorizer"| Bridge["A2A Bridge Lambda"] -->|"InvokeAgentRuntime"| Runtime
+    IAM["AWS principal<br/>CLI / scripts"] -->|"IAM SigV4"| Runtime["AgentCore Runtime"]
+    UI["Browser"] -->|"HTTPS + Cognito OIDC"| CF["CloudFront - ALB - Fargate<br/>Streamlit, fail-closed login"]
+    CF -->|"InvokeAgentRuntime"| Runtime
+    Agent["Other agent"] -->|"Bearer JWT, A2A"| APIGW["API Gateway HTTP API"]
+    APIGW -->|"Cognito / Entra ID<br/>JWT authorizer"| Bridge["A2A Bridge Lambda"]
+    Bridge -->|"InvokeAgentRuntime"| Runtime
 
     Runtime -->|"execution_role"| Role["IAM Role"]
-    Runtime -->|"guardrailConfig"| GR["Bedrock Guardrail<br/>prompt-attack · PII · harmful-security"]
+    Runtime -->|"guardrailConfig"| GR["Bedrock Guardrail<br/>prompt-attack, PII, harmful-security"]
     Role -->|"bedrock:InvokeModel + ApplyGuardrail"| Model["Claude Sonnet 4.6"]
-    Role -->|"dynamodb:GetItem/Query"| DDB["DynamoDB<br/>(read-only from the agent)"]
+    Role -->|"dynamodb:GetItem/Query"| DDB["DynamoDB<br/>read-only from the agent"]
     Role -->|"bedrock:Retrieve"| KB["Knowledge Base"]
     Role -->|"bedrock-agentcore:InvokeGateway"| GW["MCP Gateway"]
-    GW -->|"SigV4 MCP"| WS["Web Search<br/>(stays within AWS)"]
+    GW -->|"SigV4 MCP"| WS["Web Search<br/>stays within AWS"]
 
     style Runtime fill:#ff9900,color:#fff
     style Role fill:#dd3522,color:#fff

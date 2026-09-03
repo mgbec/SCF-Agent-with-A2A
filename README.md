@@ -8,25 +8,24 @@ gap analysis, and remediation guidance.
 
 ```mermaid
 graph TD
-    CLI["👤 CLI / scripts<br/>ask.py, generate_report.py"] -->|"AWS IAM SigV4"| Runtime
-    Web["🌐 Hosted UI<br/>CloudFront → ALB → Fargate<br/>Streamlit + Cognito login"] -->|"InvokeAgentRuntime"| Runtime
-    A2A["🤝 Other agents<br/>A2A JSON-RPC + Agent Card"] -->|"Bearer JWT"| APIGW["API Gateway HTTP API<br/>Cognito / Entra ID authorizers"]
+    CLI["CLI / scripts<br/>ask.py, generate_report.py"] -->|"AWS IAM SigV4"| Runtime["AgentCore Runtime<br/>Strands Agent + Claude Sonnet 4.6<br/>+ Bedrock Guardrail"]
+    Web["Hosted UI<br/>CloudFront - ALB - Fargate<br/>Streamlit + Cognito login"] -->|"InvokeAgentRuntime"| Runtime
+    A2A["Other agents<br/>A2A JSON-RPC + Agent Card"] -->|"Bearer JWT"| APIGW["API Gateway HTTP API<br/>Cognito / Entra ID authorizers"]
     APIGW --> Bridge["A2A Bridge Lambda"]
     Bridge -->|"InvokeAgentRuntime"| Runtime
-    Bridge --> Tasks["🗄️ DynamoDB<br/>A2A tasks (24h TTL)"]
+    Bridge --> Tasks["DynamoDB<br/>A2A tasks, 24h TTL"]
 
-    Runtime["AgentCore Runtime<br/>Strands Agent + Claude Sonnet 4.6<br/>+ Bedrock Guardrail"]
-    Runtime -->|"1. Discovery"| KB["📚 Bedrock KB<br/>S3 Vectors<br/>Semantic Search"]
-    Runtime -->|"2. Full Details"| DDB["🗄️ DynamoDB<br/>SCF Controls<br/>1,534 items"]
-    Runtime -->|"3. Past Answers"| Answers["📋 DynamoDB<br/>Approved Answers<br/>Questionnaire History"]
-    Runtime -->|"4. Remember/Recall"| Memory["🧠 AgentCore Memory<br/>Org Context<br/>90-day retention"]
-    Runtime -->|"5. Web Research"| Gateway["🌐 MCP Gateway<br/>SigV4 Signed"]
+    Runtime -->|"1. Discovery"| KB["Bedrock KB<br/>S3 Vectors<br/>Semantic Search"]
+    Runtime -->|"2. Full Details"| DDB["DynamoDB<br/>SCF Controls<br/>1,534 items"]
+    Runtime -->|"3. Past Answers"| Answers["DynamoDB<br/>Approved Answers<br/>Questionnaire History"]
+    Runtime -->|"4. Remember/Recall"| Memory["AgentCore Memory<br/>Org Context<br/>90-day retention"]
+    Runtime -->|"5. Web Research"| Gateway["MCP Gateway<br/>SigV4 Signed"]
 
     Gateway --> WebSearch["Web Search Connector<br/>AWS Managed Index"]
     KB --> S3["S3 Bucket<br/>1,535 .txt files"]
 
-    Ingest["📥 ingest_answers.py<br/>CSV / XLSX / JSON"] --> Answers
-    Updater["⏰ Auto-Updater<br/>Lambda + EventBridge<br/>Weekly check"] -->|"New SCF version"| S3
+    Ingest["ingest_answers.py<br/>CSV / XLSX / JSON"] --> Answers
+    Updater["Auto-Updater<br/>Lambda + EventBridge<br/>Weekly check"] -->|"New SCF version"| S3
     Updater -->|"Reload"| DDB
 
     style Runtime fill:#ff9900,color:#fff

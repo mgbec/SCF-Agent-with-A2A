@@ -12,29 +12,29 @@ deliberately picks an option below.
 
 ## 1. Current behaviour, and why
 
-`message/stream` returns a **valid `text/event-stream` body, but buffered**: the
-bridge (`lambda/a2a_bridge/handler.py`) runs the agent to completion, then
-`_sse()` concatenates the three frames (`working` → `artifact-update` →
-`completed`) into a single response. `message/send` returns the completed `Task`
-as JSON the same way.
+The bridge (`lambda/a2a_bridge/handler.py`) is **request/response only**:
+`message/send` runs the agent to completion and returns the `Task` as JSON. The
+Agent Card advertises `capabilities.streaming = false`, and `message/stream` /
+`tasks/resubscribe` return a JSON-RPC `-32004`.
 
-Two hard AWS limits cause this:
+Two hard AWS limits force this:
 
 | Limit | Effect |
 |---|---|
 | **API Gateway HTTP API integration timeout is a fixed 30 s** (not configurable, applies to every integration type) | Any turn that takes longer than ~30 s returns `504` to the caller — even though the Lambda keeps running and stores the task |
-| **The Python *managed* Lambda runtime cannot stream a response body** | Even without the 30 s cap, a Lambda-proxy response is fully buffered before the client sees byte one — so "streaming" over this path can only ever be fake |
+| **The Python *managed* Lambda runtime cannot stream a response body** | A Lambda-proxy response is fully buffered before the client sees byte one — so "streaming" over this path can only ever be fake |
 
 What works well today and shouldn't be lost:
 
 - Short/medium queries (most control lookups, framework mappings, targeted gap
   questions) finish inside 30 s.
-- `tasks/get` / `tasks/resubscribe` retrieve a completed task from the store for
-  24 h — a caller that gets cut off can still collect the result *if it has the
-  task id* (see the caveat in §7).
+- `tasks/get` retrieves a completed task from the store for 24 h — a caller that
+  got cut off can still collect the result *if it has the task id* (see the
+  caveat in §7).
 - Auth is **API Gateway's native JWT authorizers** (Cognito + Entra ID), one per
   route, zero custom code.
-- Unsupported methods return clean JSON-RPC errors.
+- Unsupported methods return clean JSON-RPC errors, and the card doesn't claim a
+  capability the bridge doesn't have.
 
 ---
 
@@ -65,7 +65,8 @@ POST /{prefix}/rpc  (message/send, non-blocking)
 - **Durability & backpressure for free:** SQS redelivery + DLQ; reserved
   concurrency on the worker caps concurrent (expensive) Bedrock runs.
 - **It is the A2A `Task` lifecycle** (`submitted → working → completed`, client
-  polls `tasks/get`). Set `capabilities.streaming` to an honest `false`.
+  polls `tasks/get`). `capabilities.streaming` is already `false` — this option
+  just makes `message/send` non-blocking instead of the client waiting on it.
 - Cost: polling latency (≤ the poll interval at the tail); a handful of extra
   API GW + Lambda + DynamoDB reads per request.
 - New resources: submit Lambda + worker Lambda + SQS queue + DLQ + event-source

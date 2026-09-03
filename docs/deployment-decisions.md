@@ -211,17 +211,18 @@ system prompt. `aws_bedrock_guardrail_version` has
 `replace_triggered_by = [aws_bedrock_guardrail.scf_agent]` so a fresh immutable
 version is cut on every edit and `GUARDRAIL_VERSION` on the runtime tracks it.
 
-## A2A streaming is buffered — on purpose (for now)
+## A2A bridge does not stream — on purpose (for now)
 
-`message/stream` runs the agent to completion, then emits the SSE frames in one
-body, and the call sits under API Gateway HTTP API's fixed 30s integration
-timeout. This is a deliberate trade-off for a fully-serverless bridge with
-API Gateway's native dual-IdP JWT authorizers and no custom auth code. Real
-incremental streaming needs a different client-facing transport (Function URL +
-Lambda Web Adapter, or Fargate + ALB) because the Python managed Lambda runtime
-can't stream and API Gateway HTTP APIs buffer + cap at 30s. The full option
-analysis — async task model, Function URL, Fargate, and what token-level
-streaming additionally needs from the agent — is in
+The bridge is request/response only: `message/send` runs the agent to completion
+and returns JSON; the Agent Card says `capabilities.streaming = false` and
+`message/stream` / `tasks/resubscribe` return `-32004`. `message/send` still sits
+under API Gateway HTTP API's fixed 30s integration timeout. This is a deliberate
+trade-off for a fully-serverless bridge with API Gateway's native dual-IdP JWT
+authorizers and no custom auth code. Real incremental streaming needs a different
+client-facing transport (Function URL + Lambda Web Adapter, or Fargate + ALB)
+because the Python managed Lambda runtime can't stream and API Gateway HTTP APIs
+buffer + cap at 30s. The full option analysis — async task model, Function URL,
+Fargate, and what token-level streaming additionally needs from the agent — is in
 [`a2a-streaming.md`](a2a-streaming.md). Not implemented; recorded so it's a
 decision later, not a rediscovery.
 

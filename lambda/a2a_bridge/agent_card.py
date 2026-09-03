@@ -127,7 +127,10 @@ def build_card(prefix: str | None) -> dict:
             "url": "https://securecontrolsframework.com",
         },
         "capabilities": {
-            "streaming": True,
+            # This bridge does NOT stream: message/stream / tasks/resubscribe
+            # return an "unsupported" error. Use message/send, then poll
+            # tasks/get. See docs/a2a-streaming.md for the options to change this.
+            "streaming": False,
             "pushNotifications": False,
             "stateTransitionHistory": True,
         },

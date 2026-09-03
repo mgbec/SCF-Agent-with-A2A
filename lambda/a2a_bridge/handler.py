@@ -20,9 +20,13 @@ namespacing.
 
 Supported JSON-RPC methods:
     message/send        -> invoke the runtime, return a completed Task (JSON)
-    message/stream      -> invoke the runtime, return the same Task as buffered SSE
-    tasks/get           -> fetch a recently completed Task from DynamoDB
-    tasks/resubscribe   -> replay the stored Task as buffered SSE
+    tasks/get           -> fetch a recently completed Task from DynamoDB (24h TTL)
+
+NOT supported (the Agent Card advertises capabilities.streaming = false):
+    message/stream / tasks/resubscribe -> return -32004; this bridge does not
+        stream (API Gateway HTTP APIs buffer + cap at 30s, and the Python managed
+        Lambda runtime can't stream). Use message/send, then poll tasks/get.
+        See docs/a2a-streaming.md for the options to add real streaming.
 Everything else returns a standard JSON-RPC error (see A2A error codes below).
 """
 
@@ -93,12 +97,6 @@ def _rpc_error(req_id, code, message, data=None):
     if data is not None:
         err["data"] = data
     return _http(200, {"jsonrpc": JSONRPC, "id": req_id, "error": err})
-
-
-def _sse(frames):
-    """Render a list of dict payloads as a buffered text/event-stream response."""
-    body = "".join(f"data: {json.dumps(f)}\n\n" for f in frames)
-    return _http(200, body, content_type="text/event-stream", extra_headers={"Cache-Control": "no-store"})
 
 
 def _prefix_from_path(path: str):
@@ -175,18 +173,16 @@ def _handle_rpc(event, prefix):
             task = _run_message(params)
             return _rpc_result(req_id, task)
 
-        if rpc_method == "message/stream":
-            task = _run_message(params)
-            return _sse(_task_stream_frames(req_id, task))
-
         if rpc_method == "tasks/get":
             return _tasks_get(req_id, params)
 
-        if rpc_method == "tasks/resubscribe":
-            task = _load_task(params.get("id"))
-            if task is None:
-                return _rpc_error(req_id, TASK_NOT_FOUND, "Task not found or expired")
-            return _sse(_task_stream_frames(req_id, task))
+        if rpc_method in ("message/stream", "tasks/resubscribe"):
+            return _rpc_error(
+                req_id,
+                UNSUPPORTED_OPERATION,
+                "Streaming is not supported (capabilities.streaming=false). "
+                "Use message/send, then poll tasks/get.",
+            )
 
         if rpc_method == "tasks/cancel":
             return _rpc_error(
@@ -209,7 +205,7 @@ def _handle_rpc(event, prefix):
 # A2A <-> AgentCore
 # --------------------------------------------------------------------------- #
 def _run_message(params: dict) -> dict:
-    """Handle message/send + message/stream: invoke the runtime, build + store a Task."""
+    """Handle message/send: invoke the runtime, build + store a Task."""
     message = params.get("message") or {}
     text = _extract_text(message.get("parts") or [])
     if not text:
@@ -303,47 +299,6 @@ def _invoke_runtime(prompt: str, session_id: str) -> str:
             or json.dumps(data)
         )
     return str(data)
-
-
-def _task_stream_frames(req_id, task: dict):
-    """A2A streaming frames for a synchronously-completed Task."""
-    context_id = task["contextId"]
-    task_id = task["id"]
-    working = {
-        "jsonrpc": JSONRPC,
-        "id": req_id,
-        "result": {
-            "kind": "status-update",
-            "taskId": task_id,
-            "contextId": context_id,
-            "status": {"state": "working", "timestamp": _now_iso()},
-            "final": False,
-        },
-    }
-    artifact = {
-        "jsonrpc": JSONRPC,
-        "id": req_id,
-        "result": {
-            "kind": "artifact-update",
-            "taskId": task_id,
-            "contextId": context_id,
-            "artifact": task["artifacts"][0],
-            "append": False,
-            "lastChunk": True,
-        },
-    }
-    completed = {
-        "jsonrpc": JSONRPC,
-        "id": req_id,
-        "result": {
-            "kind": "status-update",
-            "taskId": task_id,
-            "contextId": context_id,
-            "status": task["status"],
-            "final": True,
-        },
-    }
-    return [working, artifact, completed]
 
 
 # --------------------------------------------------------------------------- #

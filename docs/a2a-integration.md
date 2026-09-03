@@ -39,10 +39,11 @@ unchanged — this is additive ingress.
 2. **`message/send`** — extracts text from `params.message.parts`, calls
    `bedrock-agentcore:InvokeAgentRuntime`, and returns a **completed `Task`** with the
    answer as a `text` artifact. The task is stored (24 h TTL) for later `tasks/get`.
-3. **`message/stream`** — same work, returned as a buffered `text/event-stream`
-   (`status-update: working` → `artifact-update` → `status-update: completed, final`).
-   See [Streaming notes](#streaming-notes).
-4. **`tasks/get` / `tasks/resubscribe`** — replays a recently completed task from DynamoDB.
+3. **`tasks/get`** — fetches a recently completed task from DynamoDB.
+4. **`message/stream`**, **`tasks/resubscribe`** — **not supported**. The Agent Card
+   advertises `capabilities.streaming = false`; these return `-32004`. Use `message/send`,
+   then poll `tasks/get`. See [Streaming notes](#streaming-notes) and
+   [docs/a2a-streaming.md](a2a-streaming.md).
 5. **`tasks/cancel`**, **`tasks/pushNotificationConfig/*`** — return the standard A2A
    "unsupported" JSON-RPC errors (`-32002` / `-32003`); execution is synchronous.
 
@@ -196,14 +197,15 @@ asyncio.run(main())
 
 ## Streaming notes
 
-`message/stream` returns a **valid but buffered** SSE response: the bridge runs the agent
-to completion, then emits `working` → `artifact-update` → `completed` in one body. There is
-no incremental delivery and no keep-alive, and the call is still under API Gateway HTTP
-API's hard **30-second** integration timeout — a long query (full gap analysis, multi-step
-report) can `504` on both `message/send` and `message/stream`.
+This bridge **does not stream**. The Agent Card advertises
+`capabilities.streaming = false`, and `message/stream` / `tasks/resubscribe` return a
+JSON-RPC `-32004` error. Two AWS limits make real streaming impossible on this transport:
+API Gateway HTTP APIs buffer a Lambda-proxy response and cap it at **30 s**, and the Python
+*managed* Lambda runtime can't stream a response body at all. `message/send` for a long
+query (full gap analysis, multi-step report) can therefore also `504` at 30 s.
 
 This is a deliberate trade-off for a simple, fully-serverless bridge with native dual-IdP
-JWT auth. If you need real incremental streaming or need to lift the 30s ceiling, see
+JWT auth. To add real incremental streaming or lift the 30 s ceiling, see
 **[docs/a2a-streaming.md](a2a-streaming.md)** — it lays out the async-task, Lambda Function
 URL + Lambda Web Adapter, and Fargate options with their trade-offs, plus what token-level
 streaming additionally requires from the agent container.
@@ -213,9 +215,9 @@ streaming additionally requires from the agent container.
 | Method | Status |
 |--------|--------|
 | `message/send` | ✅ returns a completed `Task` |
-| `message/stream` | ✅ buffered SSE (`working` → `artifact-update` → `completed`) |
 | `tasks/get` | ✅ from the 24 h task store |
-| `tasks/resubscribe` | ✅ replays the stored task as SSE |
+| `message/stream` | ⛔ `-32004` — `capabilities.streaming = false`; use `message/send` + `tasks/get` |
+| `tasks/resubscribe` | ⛔ `-32004` — no stream to resubscribe to |
 | `tasks/cancel` | ⛔ `-32002` TaskNotCancelable (synchronous execution) |
 | `tasks/pushNotificationConfig/*` | ⛔ `-32003` PushNotificationNotSupported |
 | unknown | ⛔ `-32601` MethodNotFound |

@@ -194,8 +194,9 @@ Another agent discovers + calls this one
   3. POST {api}/{prefix}/rpc  with  Authorization: Bearer <jwt>
   4. API Gateway JWT authorizer validates issuer + audience/client_id BEFORE Lambda runs
   5. Bridge Lambda maps JSON-RPC → InvokeAgentRuntime, wraps the result as an A2A Task
-  6. Task is stored (24h TTL) so tasks/get / tasks/resubscribe work afterwards
-  method=message/send → JSON ; method=message/stream → buffered text/event-stream
+  6. Task is stored (24h TTL) so tasks/get works afterwards
+  method=message/send → JSON Task ; message/stream / tasks/resubscribe → -32004
+  (capabilities.streaming=false; see docs/a2a-streaming.md)
 ```
 
 ## Design Principles
@@ -299,7 +300,7 @@ graph LR
 | ARM64 container builds are slow | QEMU emulation on x86 | Use `--only-binary` wheels; future: CI/CD on native ARM64 |
 | ARM64 builds silently produce a **stale** image | QEMU `binfmt` handlers not registered → cross-arch `RUN` steps fail with `exec /bin/sh: exec format error`, or a cached build is reused | `docker run --privileged --rm tonistiigi/binfmt --install arm64`, then rebuild `--no-cache`; verify the image content before rolling |
 | Streamlit can't run on AWS App Runner | App Runner has no WebSocket support | Frontend runs on Fargate + ALB + CloudFront instead (`terraform/frontend.tf`) |
-| A2A `message/send` / `message/stream` can exceed 30s | API Gateway HTTP API integration timeout is a hard 30s; `message/stream` is buffered (Python managed Lambda can't stream) | Keep queries scoped for now. Options to lift this (async task model, Function URL + Lambda Web Adapter, Fargate) with trade-offs: [docs/a2a-streaming.md](a2a-streaming.md) |
+| A2A `message/send` can exceed 30s | API Gateway HTTP API integration timeout is a hard 30s; the bridge does not stream (`capabilities.streaming=false` — Python managed Lambda can't stream, API GW buffers + caps at 30s) | Keep queries scoped for now. Options to lift this (async task model, Function URL + Lambda Web Adapter, Fargate) with trade-offs: [docs/a2a-streaming.md](a2a-streaming.md) |
 | Bedrock topic policies block valid output | Topic DENY rules are applied to the model response, not just the prompt | Keep topic rules narrow (harmful only); do off-topic filtering in app code / system prompt |
 | AgentCore Gateway target provider bug | Provider omits the `credential_provider_configuration` the API always returns | Declare `credential_provider_configuration { gateway_iam_role {} }` in the resource (done in `main.tf`) |
 | Model must use inference profile ID | Bedrock on-demand requirement | Use `us.anthropic.*` not `anthropic.*`; run preflight.py to validate |

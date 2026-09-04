@@ -108,7 +108,7 @@ Click **Log out** in the sidebar. You'll return to the "Sign in required" screen
 | Symptom | What to do |
 |---|---|
 | Stuck on "Sign in required" after logging in | Allow cookies for `cloudfront.net`, then retry. Private/incognito windows that block third-party cookies can loop. |
-| Page shows a grey "loading" placeholder and never fills in | Refresh once. If it persists, the app may be redeploying — try again in a few minutes. |
+| Page shows a gray "loading" placeholder and never fills in | Refresh once. If it persists, the app may be redeploying — try again in a few minutes. |
 | "Sign in" fails with *user does not exist* / *account disabled* | Ask your admin to create or re-enable your account. |
 | The agent replies *"I can only help with cybersecurity compliance…"* to a normal SCF question | Rephrase more specifically (name a control, domain, or framework). If it keeps happening on clearly on-topic questions, tell your admin — the content guardrail may need tuning. |
 | Chat seems to "forget" earlier messages | You're in a new tab/session, or **Clear Chat** was used. History is per-session and not saved server-side. |

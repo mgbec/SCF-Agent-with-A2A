@@ -169,6 +169,28 @@ WebSocket.
 - `403 "Direct access is not allowed"` = you hit the ALB directly; use
   `terraform output -raw frontend_url` (CloudFront).
 
+### `admin-create-user` doesn't email the temporary password
+
+The user is created (`aws cognito-idp admin-list-users` shows them, status
+`FORCE_CHANGE_PASSWORD`) but no email ever arrives. Cause: `--desired-delivery-mediums`
+was omitted, and the **AWS CLI/API default is `SMS`, not `EMAIL`**. With no
+`phone_number` attribute set, the invite has nowhere to go and is dropped —
+silently; the command still returns success.
+
+**Fix:** always pass `--desired-delivery-mediums EMAIL` explicitly:
+
+```powershell
+aws cognito-idp admin-create-user --user-pool-id <pool-id> --username you@example.com `
+  --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true `
+  --desired-delivery-mediums EMAIL --region us-east-1
+```
+
+If it's still missing after that: check spam (this pool has no `email_configuration`
+block, so Cognito sends from its own default domain, not a verified SES sender — some
+mail providers flag that) and confirm the address doesn't already exist
+(`aws cognito-idp admin-get-user` — Cognito won't resend an invite to an existing user;
+delete and recreate, or use `admin-create-user --message-action RESEND`).
+
 ### Agent refuses every question ("I cannot provide that type of response")
 
 The Bedrock Guardrail is over-blocking. Bedrock **topic policies are evaluated

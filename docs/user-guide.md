@@ -21,10 +21,14 @@ aws cognito-idp admin-create-user \
   --user-pool-id us-east-1_LYSTa2sIN \
   --username you@example.com \
   --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true \
+  --desired-delivery-mediums EMAIL \
   --region us-east-1
 ```
 
-Cognito emails you a **temporary password**.
+Cognito emails you a **temporary password**. (`--desired-delivery-mediums EMAIL` is required —
+the AWS CLI defaults to `SMS` if it's omitted, and since no phone number is set the invite has
+nowhere to go, so no email is sent even though the user is created. If it still doesn't arrive,
+check spam: this pool uses Cognito's built-in sender, not a custom SES domain.)
 
 ## 3. First sign-in
 

@@ -137,8 +137,11 @@ aws cognito-idp admin-create-user `
   --user-pool-id (terraform output -raw cognito_user_pool_id) `
   --username you@example.com `
   --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true `
+  --desired-delivery-mediums EMAIL `
   --region us-east-1
 # The temporary password arrives by email; you set a permanent one on first login.
+# --desired-delivery-mediums EMAIL is required - the CLI defaults to SMS, and with no
+# phone number attribute the invite silently goes nowhere (the user is still created).
 ```
 
 ### Cost

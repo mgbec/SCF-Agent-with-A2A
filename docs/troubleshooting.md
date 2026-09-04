@@ -172,24 +172,39 @@ WebSocket.
 ### `admin-create-user` doesn't email the temporary password
 
 The user is created (`aws cognito-idp admin-list-users` shows them, status
-`FORCE_CHANGE_PASSWORD`) but no email ever arrives. Cause: `--desired-delivery-mediums`
-was omitted, and the **AWS CLI/API default is `SMS`, not `EMAIL`**. With no
-`phone_number` attribute set, the invite has nowhere to go and is dropped —
-silently; the command still returns success.
+`FORCE_CHANGE_PASSWORD`) but no email ever arrives — even with
+`--desired-delivery-mediums EMAIL` and `--message-action RESEND`.
 
-**Fix:** always pass `--desired-delivery-mediums EMAIL` explicitly:
+Two layered causes:
+
+1. `--desired-delivery-mediums` defaults to `SMS` if omitted. With no `phone_number`
+   attribute set, the invite has nowhere to go and is dropped silently; the command
+   still returns success. Always pass `--desired-delivery-mediums EMAIL` explicitly.
+2. **Even with that fixed, delivery can still silently fail.** This pool has no
+   `email_configuration` block (check with
+   `aws cognito-idp describe-user-pool --user-pool-id <id> --query UserPool.EmailConfiguration`) —
+   it uses Cognito's shared `COGNITO_DEFAULT` sender, which AWS documents as
+   testing-only: low quota, no bounce/delivery visibility, and mail from it gets
+   filtered by a lot of providers. In practice this is unreliable enough that you
+   should not depend on it for real users.
+
+**Reliable fix — skip email, set the password directly:**
 
 ```powershell
-aws cognito-idp admin-create-user --user-pool-id <pool-id> --username you@example.com `
-  --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true `
-  --desired-delivery-mediums EMAIL --region us-east-1
+aws cognito-idp admin-set-user-password --user-pool-id <pool-id> --username you@example.com `
+  --password 'Some-Strong-Passw0rd!' --permanent --region us-east-1
 ```
 
-If it's still missing after that: check spam (this pool has no `email_configuration`
-block, so Cognito sends from its own default domain, not a verified SES sender — some
-mail providers flag that) and confirm the address doesn't already exist
-(`aws cognito-idp admin-get-user` — Cognito won't resend an invite to an existing user;
-delete and recreate, or use `admin-create-user --message-action RESEND`).
+This moves the user straight to `CONFIRMED` with no invite step at all — verify with
+`admin-list-users` (`UserStatus: CONFIRMED`). Share the password with the user out of
+band (Slack, phone, etc.).
+
+**Durable fix for many users:** wire `email_configuration` on
+`aws_cognito_user_pool.a2a` (`terraform/cognito-a2a.tf`) to Amazon SES (needs a verified
+sending domain/address in `us-east-1`). Not set up in this project by default.
+
+(Also worth knowing: `admin-create-user --message-action RESEND` only works while the
+user is still `UNCONFIRMED`/`FORCE_CHANGE_PASSWORD` — it errors on a `CONFIRMED` user.)
 
 ### Agent refuses every question ("I cannot provide that type of response")
 

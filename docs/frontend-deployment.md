@@ -139,10 +139,22 @@ aws cognito-idp admin-create-user `
   --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true `
   --desired-delivery-mediums EMAIL `
   --region us-east-1
-# The temporary password arrives by email; you set a permanent one on first login.
-# --desired-delivery-mediums EMAIL is required - the CLI defaults to SMS, and with no
-# phone number attribute the invite silently goes nowhere (the user is still created).
+# The temporary password is *meant* to arrive by email, but this pool has no SES
+# email_configuration - it uses Cognito's shared COGNITO_DEFAULT sender, which is
+# unreliable and gives no delivery visibility. If it doesn't arrive, skip email
+# entirely and set a permanent password directly (no invite needed):
+aws cognito-idp admin-set-user-password `
+  --user-pool-id (terraform output -raw cognito_user_pool_id) `
+  --username you@example.com `
+  --password 'Some-Strong-Passw0rd!' `
+  --permanent `
+  --region us-east-1
 ```
+
+For a real deployment with many users, wire `email_configuration` on
+`aws_cognito_user_pool.a2a` (`terraform/cognito-a2a.tf`) to Amazon SES instead — that
+needs a verified sending domain/address in SES and gives reliable delivery plus bounce
+visibility. Not set up here; `admin-set-user-password` is the supported path for now.
 
 ### Cost
 

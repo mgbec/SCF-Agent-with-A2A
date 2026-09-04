@@ -134,53 +134,49 @@ gives you a chat loop reusing the same `contextId`. Needs at least one confirmed
 pool and `redirect_uri` (default `http://localhost:8501/oauth2callback`) registered in
 `cognito_a2a_web_callback_urls`.
 
+**1. Login (`--auth login`) — hosted-UI sign-in:**
+
 ```mermaid
 sequenceDiagram
-    autonumber
     actor User
     participant CLI as a2a_test_client.py
-    participant LB as Local loopback server
     participant Browser
     participant Cognito as Cognito hosted UI
-    participant API as API Gateway - cognito/rpc
+    participant LB as Loopback server
 
-    Note over User,API: Prerequisites: one confirmed user in the pool, and redirect_uri<br/>default http colon slash slash localhost 8501 oauth2callback<br/>listed in cognito_a2a_web_callback_urls
+    CLI->>LB: start listening on redirect_uri
+    CLI->>Browser: open the Cognito sign-in page
+    User->>Browser: enter email and password
+    Cognito-->>LB: redirect with an authorization code
+    LB-->>CLI: hand off the code
+    CLI->>Cognito: exchange the code for an access token
+    Cognito-->>CLI: access token
+```
 
-    User->>CLI: run with --auth login "prompt"
-    CLI->>API: GET .well-known/agent-card.json
-    API-->>CLI: Agent Card - name, capabilities, security schemes
-    CLI->>CLI: card-only mode stops here and exits
+**2. Machine-to-machine (`--auth m2m`) — no browser:**
 
-    alt --auth login, human via hosted UI
-        CLI->>CLI: generate PKCE verifier and challenge
-        CLI->>LB: start listening on the redirect_uri port
-        CLI->>Browser: open the Cognito authorize URL
-        Browser->>Cognito: GET oauth2 authorize with code_challenge
-        Cognito-->>Browser: hosted UI sign-in form
-        User->>Browser: enter email and password
-        Browser->>Cognito: submit credentials
-        Cognito-->>Browser: redirect to redirect_uri with code and state
-        Browser->>LB: GET redirect_uri with code and state
-        LB-->>CLI: authorization code
-        CLI->>Cognito: POST oauth2 token - code plus code_verifier
-        Cognito-->>CLI: access token
-    else --auth m2m, no browser
-        CLI->>Cognito: POST oauth2 token - client_credentials
-        Cognito-->>CLI: access token
-    end
+```mermaid
+sequenceDiagram
+    participant CLI as a2a_test_client.py
+    participant Cognito
 
-    CLI->>API: POST cognito/rpc message send, Bearer access token
-    API-->>CLI: completed Task with contextId and answer
+    CLI->>Cognito: request a token with client_credentials
+    Cognito-->>CLI: access token
+```
+
+**3. Calling the agent — same for both auth modes:**
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI as a2a_test_client.py
+    participant API as SCF Agent via cognito rpc
+
+    User->>CLI: type a prompt
+    CLI->>API: message send, with the access token
+    API-->>CLI: completed task with the answer
     CLI-->>User: print the answer
-
-    opt --interactive
-        loop until user types quit
-            User->>CLI: next prompt
-            CLI->>API: POST cognito/rpc message send, same contextId
-            API-->>CLI: completed Task
-            CLI-->>User: print the answer
-        end
-    end
+    Note over User,CLI: interactive mode repeats this, reusing the same contextId
 ```
 
 ## Calling the agent — Microsoft Entra ID

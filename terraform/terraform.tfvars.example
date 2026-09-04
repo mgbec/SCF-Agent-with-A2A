@@ -30,7 +30,7 @@ agent_public_name = "SCF Compliance Assessment Agent"
 cognito_a2a_domain_prefix = "scf-agent-a2a"
 
 # Callback/logout URLs for the interactive Cognito app client (hosted UI login)
-cognito_a2a_web_callback_urls = ["http://localhost:8501/"]
+cognito_a2a_web_callback_urls = ["http://localhost:8501/oauth2callback", "http://localhost:8501/"]
 
 # --- Microsoft Entra ID route (optional) ---
 # Leave entra_tenant_id empty to skip the Entra-authorized route entirely.

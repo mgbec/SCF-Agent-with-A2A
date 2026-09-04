@@ -437,7 +437,8 @@ scf-compliance-agent/
 │   ├── load_dynamodb.py        # Load full SCF data into DynamoDB
 │   ├── reindex_kb.py           # Reload trimmed text into KB (S3 Vectors)
 │   ├── upload_scf_data.py      # Legacy: initial S3 upload (use load_dynamodb.py instead)
-│   └── test_agent.py           # Integration test suite
+│   ├── test_agent.py           # Integration test suite (direct IAM path)
+│   └── a2a_test_client.py      # A2A test client: Cognito hosted-UI login or M2M, real JSON-RPC calls
 ├── frontend/
 │   ├── app.py                  # Chat interface (Streamlit, boto3 InvokeAgentRuntime)
 │   ├── auth.py                 # Fail-closed OIDC login gate (st.login / st.user)

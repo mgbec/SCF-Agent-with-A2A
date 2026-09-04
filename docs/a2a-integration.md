@@ -109,8 +109,8 @@ curl -s -X POST "$RPC" -H "Authorization: Bearer $TOKEN" -H "content-type: appli
 
 ### Cognito — interactive users (hosted UI)
 
-The `cognito_a2a_web_client_id` app client uses the `authorization_code` flow. Users sign
-in at:
+The `cognito_a2a_web_client_id` app client uses the `authorization_code` flow (PKCE, no
+client secret — it's a public client). Users sign in at:
 
 ```
 https://<cognito_a2a_domain_prefix>.auth.<region>.amazoncognito.com/login
@@ -120,9 +120,19 @@ https://<cognito_a2a_domain_prefix>.auth.<region>.amazoncognito.com/login
   &redirect_uri=<one of cognito_a2a_web_callback_urls>
 ```
 
-Create users with `aws cognito-idp admin-create-user` (the pool is admin-create-only).
-Exchange the returned `code` at the same `/oauth2/token` endpoint for an access token, then
-call `/cognito/rpc` exactly as above.
+Create users with `aws cognito-idp admin-create-user` / `admin-set-user-password` (the pool
+is admin-create-only — see [docs/user-guide.md](user-guide.md)). Exchange the returned `code`
+at the same `/oauth2/token` endpoint for an access token, then call `/cognito/rpc` exactly
+as above.
+
+**Easiest way to actually run this:** `python scripts/a2a_test_client.py --auth login "<prompt>"`
+drives the whole flow for you — opens your browser to the Cognito hosted UI, catches the
+PKCE redirect with a local loopback server (no copy-pasting a `code` out of the address bar),
+exchanges it, and sends a real `message/send`. `--auth m2m` does the same with
+client_credentials (no browser). `--card-only` just fetches the Agent Card. `--interactive`
+gives you a chat loop reusing the same `contextId`. Needs at least one confirmed user in the
+pool and `redirect_uri` (default `http://localhost:8501/oauth2callback`) registered in
+`cognito_a2a_web_callback_urls`.
 
 ## Calling the agent — Microsoft Entra ID
 

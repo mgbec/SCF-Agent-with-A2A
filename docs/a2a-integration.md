@@ -134,6 +134,55 @@ gives you a chat loop reusing the same `contextId`. Needs at least one confirmed
 pool and `redirect_uri` (default `http://localhost:8501/oauth2callback`) registered in
 `cognito_a2a_web_callback_urls`.
 
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant CLI as a2a_test_client.py
+    participant LB as Local loopback server
+    participant Browser
+    participant Cognito as Cognito hosted UI
+    participant API as API Gateway - cognito/rpc
+
+    Note over User,API: Prerequisites: one confirmed user in the pool, and redirect_uri<br/>default http colon slash slash localhost 8501 oauth2callback<br/>listed in cognito_a2a_web_callback_urls
+
+    User->>CLI: run with --auth login "prompt"
+    CLI->>API: GET .well-known/agent-card.json
+    API-->>CLI: Agent Card - name, capabilities, security schemes
+    CLI->>CLI: card-only mode stops here and exits
+
+    alt --auth login, human via hosted UI
+        CLI->>CLI: generate PKCE verifier and challenge
+        CLI->>LB: start listening on the redirect_uri port
+        CLI->>Browser: open the Cognito authorize URL
+        Browser->>Cognito: GET oauth2 authorize with code_challenge
+        Cognito-->>Browser: hosted UI sign-in form
+        User->>Browser: enter email and password
+        Browser->>Cognito: submit credentials
+        Cognito-->>Browser: redirect to redirect_uri with code and state
+        Browser->>LB: GET redirect_uri with code and state
+        LB-->>CLI: authorization code
+        CLI->>Cognito: POST oauth2 token - code plus code_verifier
+        Cognito-->>CLI: access token
+    else --auth m2m, no browser
+        CLI->>Cognito: POST oauth2 token - client_credentials
+        Cognito-->>CLI: access token
+    end
+
+    CLI->>API: POST cognito/rpc message send, Bearer access token
+    API-->>CLI: completed Task with contextId and answer
+    CLI-->>User: print the answer
+
+    opt --interactive
+        loop until user types quit
+            User->>CLI: next prompt
+            CLI->>API: POST cognito/rpc message send, same contextId
+            API-->>CLI: completed Task
+            CLI-->>User: print the answer
+        end
+    end
+```
+
 ## Calling the agent — Microsoft Entra ID
 
 ### One-time: register the API in your tenant

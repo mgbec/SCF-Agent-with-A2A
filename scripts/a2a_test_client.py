@@ -8,7 +8,9 @@ Two auth modes against the Cognito-guarded route (`/cognito/rpc`):
     m2m     Machine-to-machine client_credentials (no browser, no user).
 
 Either way this is a genuine A2A client: it fetches the Agent Card, then talks
-JSON-RPC 2.0 over the real deployed API Gateway route.
+JSON-RPC 2.0 over the real deployed API Gateway route. `message/send` is
+non-blocking on this bridge, so the client submits, then polls `tasks/get` (with
+a heartbeat line) until the task reaches a terminal state.
 
 Usage:
     python a2a_test_client.py --auth login "Look up SCF control GOV-01"

@@ -156,6 +156,19 @@ mismatch, then add the block.
 The agent-card routes (`GET .../.well-known/agent-card.json`) are public — a 401
 there means you hit `/rpc` by mistake.
 
+### A2A task never leaves `submitted` / `working` (or lands in the DLQ)
+
+`message/send` is async: it returns a `submitted` Task and an SQS-triggered worker
+Lambda (`scf-agent-a2a-worker`) runs the turn. The client polls `tasks/get`.
+
+| Symptom | Cause / fix |
+|---|---|
+| Stuck `submitted`, never `working` | Worker not consuming. Check the event-source mapping is `Enabled` (`aws lambda list-event-source-mappings --function-name scf-agent-a2a-worker`) and the worker log group exists. |
+| Stuck `working`, then `tasks/get` keeps returning `working` for minutes | Worker crashed or timed out mid-turn. Check `/aws/lambda/scf-agent-a2a-worker`. After `maxReceiveCount` (2) the SQS message moves to `scf-agent-a2a-tasks-dlq` (`terraform output a2a_tasks_dlq_url`); `aws sqs receive-message` on the DLQ shows the payload. Raise `a2a_worker_timeout` if turns legitimately need more than 600s (Lambda hard max 900). |
+| Task goes straight to `failed` | The worker ran but `InvokeAgentRuntime` errored — model access, guardrail block, or runtime cold start. The error text is in `status.message.parts[0].text`; full trace in the worker log. A handled error like this is *not* retried and does not hit the DLQ. |
+| `message/send` itself returns `-32603` | Submit path only touches DynamoDB + SQS — this is a table/queue name or IAM problem on `scf-agent-a2a-bridge`, not the agent. |
+| `tasks/cancel` returns the task as `completed`/`failed` instead of `canceled` | The worker finished between your `tasks/get` and the cancel — expected; the terminal state wins. |
+
 ### Hosted frontend: blank page / "loading" skeleton forever
 
 Browser console shows `wss://.../\_stcore/stream failed`. Streamlit needs a

@@ -248,14 +248,7 @@ def _rpc(rpc_url: str, token: str, method: str, params: dict, req_id: str):
     )
 
 
-def send_message(rpc_url: str, token: str, text: str, context_id: str | None) -> dict:
-    message = {"role": "user", "messageId": secrets.token_hex(8), "parts": [{"kind": "text", "text": text}]}
-    if context_id:
-        message["contextId"] = context_id
-    status, body = _rpc(rpc_url, token, "message/send", {"message": message}, req_id="1")
-    if status != 200 or "error" in body:
-        raise RuntimeError(f"message/send failed ({status}): {body}")
-    return body["result"]
+_TERMINAL = {"completed", "failed", "canceled", "rejected"}
 
 
 def get_task(rpc_url: str, token: str, task_id: str) -> dict:
@@ -263,6 +256,41 @@ def get_task(rpc_url: str, token: str, task_id: str) -> dict:
     if status != 200 or "error" in body:
         raise RuntimeError(f"tasks/get failed ({status}): {body}")
     return body["result"]
+
+
+def send_message(rpc_url: str, token: str, text: str, context_id: str | None, poll_timeout: int = 900) -> dict:
+    """message/send is non-blocking: it returns a 'submitted' Task. Poll tasks/get
+    until the state is terminal, then return that final Task."""
+    message = {"role": "user", "messageId": secrets.token_hex(8), "parts": [{"kind": "text", "text": text}]}
+    if context_id:
+        message["contextId"] = context_id
+    status, body = _rpc(rpc_url, token, "message/send", {"message": message}, req_id="1")
+    if status != 200 or "error" in body:
+        raise RuntimeError(f"message/send failed ({status}): {body}")
+
+    task = body["result"]
+    task_id = task["id"]
+    state = task["status"]["state"]
+    started = time.time()
+    last_beat = 0.0
+    while state not in _TERMINAL:
+        if time.time() - started > poll_timeout:
+            raise RuntimeError(f"tasks/get still '{state}' after {poll_timeout}s (task_id={task_id})")
+        time.sleep(2)
+        task = get_task(rpc_url, token, task_id)
+        state = task["status"]["state"]
+        if time.time() - last_beat >= 10:
+            print(f"    ... {state} ({int(time.time() - started)}s)")
+            last_beat = time.time()
+
+    if state != "completed":
+        detail = ""
+        msg = task.get("status", {}).get("message") or {}
+        parts = msg.get("parts") or []
+        if parts and parts[0].get("text"):
+            detail = f": {parts[0]['text']}"
+        raise RuntimeError(f"task {state}{detail} (task_id={task_id})")
+    return task
 
 
 # --------------------------------------------------------------------------- #
@@ -318,7 +346,8 @@ def main():
         print(f">>> {prompt}")
         task = send_message(rpc_url, token, prompt, context_id)
         context_id = task["contextId"]
-        answer = task["artifacts"][0]["parts"][0]["text"]
+        artifacts = task.get("artifacts") or []
+        answer = artifacts[0]["parts"][0]["text"] if artifacts else "(no artifact)"
         print(f"<<< {answer}")
         print(f"    task_id={task['id']}  contextId={context_id}  state={task['status']['state']}\n")
 

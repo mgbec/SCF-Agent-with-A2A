@@ -100,6 +100,23 @@ variable "a2a_custom_domain" {
   default     = ""
 }
 
+variable "a2a_worker_timeout" {
+  description = "Max seconds the async A2A worker Lambda may run one agent turn (Lambda hard max 900)."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.a2a_worker_timeout >= 30 && var.a2a_worker_timeout <= 900
+    error_message = "a2a_worker_timeout must be between 30 and 900."
+  }
+}
+
+variable "a2a_worker_max_concurrency" {
+  description = "Max concurrent async A2A worker invocations (SQS event-source scaling cap; minimum 2). Caps concurrent InvokeAgentRuntime / Bedrock calls without touching the account's reserved-concurrency pool."
+  type        = number
+  default     = 5
+}
+
 ################################################################################
 # Streamlit frontend (App Runner)
 ################################################################################

@@ -2,8 +2,8 @@
 A2A Bridge Lambda
 =================
 
-Terminates incoming Agent2Agent (A2A) protocol traffic and forwards it to the
-existing Bedrock AgentCore Runtime that hosts the SCF Compliance Agent.
+Terminates incoming Agent2Agent (A2A) protocol traffic in front of the Bedrock
+AgentCore Runtime that hosts the SCF Compliance Agent.
 
 Fronted by an API Gateway HTTP API (payload format 2.0) with two JWT authorizers:
 
@@ -18,19 +18,26 @@ JWT authorizer *before* this function runs, so this handler trusts
 requestContext.authorizer.jwt.claims and only uses it for logging / session
 namespacing.
 
-Supported JSON-RPC methods:
-    message/send        -> invoke the runtime, return a completed Task (JSON)
-    tasks/get           -> fetch a recently completed Task from DynamoDB (24h TTL)
+ASYNC task model (API Gateway HTTP APIs cap the integration at ~30s):
+    message/send  -> write a Task {state: "submitted"}, enqueue it on SQS, return
+                     that Task immediately. A separate worker Lambda
+                     (lambda/a2a_worker) runs the agent and updates the Task to
+                     working -> completed / failed.
+    tasks/get     -> read the Task from DynamoDB. Poll this until the state is
+                     terminal (completed / failed / canceled). This is how a
+                     client gets the answer.
+    tasks/cancel  -> mark a non-terminal Task "canceled" (best effort).
 
-NOT supported (the Agent Card advertises capabilities.streaming = false):
-    message/stream / tasks/resubscribe -> return -32004; this bridge does not
-        stream (API Gateway HTTP APIs buffer + cap at 30s, and the Python managed
-        Lambda runtime can't stream). Use message/send, then poll tasks/get.
-        See docs/a2a-streaming.md for the options to add real streaming.
-Everything else returns a standard JSON-RPC error (see A2A error codes below).
+NOT supported:
+    message/stream / tasks/resubscribe   -> -32004 (capabilities.streaming = false;
+        see docs/a2a-streaming.md for the options to add real incremental streaming)
+    tasks/pushNotificationConfig/*       -> -32003
+The message/send `configuration.blocking` flag is not honored - message/send is
+always non-blocking (honoring it would re-introduce the 30s timeout).
 """
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -40,22 +47,23 @@ import uuid
 from datetime import datetime, timezone
 
 import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
-AGENT_RUNTIME_ARN = os.environ["AGENT_RUNTIME_ARN"]
-AGENT_RUNTIME_QUALIFIER = os.environ.get("AGENT_RUNTIME_QUALIFIER", "DEFAULT")
 TASKS_TABLE = os.environ["A2A_TASKS_TABLE"]
+QUEUE_URL = os.environ["A2A_QUEUE_URL"]
 TASK_TTL_SECONDS = int(os.environ.get("A2A_TASK_TTL_SECONDS", "86400"))
 
-_agentcore = boto3.client("bedrock-agentcore")
+_sqs = boto3.client("sqs")
 _tasks = boto3.resource("dynamodb").Table(TASKS_TABLE)
 
 # AgentCore runtimeSessionId must match [A-Za-z0-9_-]{33,}
 _SESSION_RE = re.compile(r"^[A-Za-z0-9_\-]{33,}$")
 
 JSONRPC = "2.0"
+TERMINAL = {"completed", "failed", "canceled", "rejected"}
 
 # JSON-RPC + A2A error codes
 PARSE_ERROR = -32700
@@ -67,7 +75,6 @@ TASK_NOT_FOUND = -32001
 TASK_NOT_CANCELABLE = -32002
 PUSH_NOT_SUPPORTED = -32003
 UNSUPPORTED_OPERATION = -32004
-CONTENT_TYPE_NOT_SUPPORTED = -32005
 
 # CORS response headers are added by the API Gateway HTTP API (cors_configuration
 # in terraform/a2a.tf), so the handler does not set them itself.
@@ -126,6 +133,12 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _sha_session(caller: str, context_id: str) -> str:
+    """Per-(caller, context) AgentCore runtimeSessionId: 64 hex chars, so two
+    callers that pass the same contextId don't share one AgentCore session."""
+    return hashlib.sha256(f"{caller}:{context_id}".encode("utf-8")).hexdigest()
+
+
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
@@ -170,11 +183,13 @@ def _handle_rpc(event, prefix):
 
     try:
         if rpc_method == "message/send":
-            task = _run_message(params)
-            return _rpc_result(req_id, task)
+            return _rpc_result(req_id, _submit_message(params, caller))
 
         if rpc_method == "tasks/get":
             return _tasks_get(req_id, params)
+
+        if rpc_method == "tasks/cancel":
+            return _tasks_cancel(req_id, params)
 
         if rpc_method in ("message/stream", "tasks/resubscribe"):
             return _rpc_error(
@@ -184,17 +199,12 @@ def _handle_rpc(event, prefix):
                 "Use message/send, then poll tasks/get.",
             )
 
-        if rpc_method == "tasks/cancel":
-            return _rpc_error(
-                req_id, TASK_NOT_CANCELABLE, "Task cannot be canceled (synchronous execution)"
-            )
-
         if rpc_method.startswith("tasks/pushNotificationConfig/"):
             return _rpc_error(req_id, PUSH_NOT_SUPPORTED, "Push notifications are not supported")
 
         return _rpc_error(req_id, METHOD_NOT_FOUND, f"Method not found: {rpc_method}")
 
-    except ValueError as exc:  # raised by _run_message for bad params
+    except ValueError as exc:  # raised for bad params
         return _rpc_error(req_id, INVALID_PARAMS, str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.exception("A2A request failed")
@@ -202,26 +212,22 @@ def _handle_rpc(event, prefix):
 
 
 # --------------------------------------------------------------------------- #
-# A2A <-> AgentCore
+# message/send -> submit + enqueue
 # --------------------------------------------------------------------------- #
-def _run_message(params: dict) -> dict:
-    """Handle message/send: invoke the runtime, build + store a Task."""
+def _submit_message(params: dict, caller: str) -> dict:
     message = params.get("message") or {}
     text = _extract_text(message.get("parts") or [])
     if not text:
         raise ValueError("message.parts must contain at least one text or data part")
 
     incoming_context = message.get("contextId") or params.get("contextId")
-    session_id = (
+    context_id = (
         incoming_context
         if isinstance(incoming_context, str) and _SESSION_RE.match(incoming_context)
         else uuid.uuid4().hex + uuid.uuid4().hex
     )
-    context_id = session_id
+    runtime_session_id = _sha_session(caller, context_id)
     task_id = uuid.uuid4().hex + uuid.uuid4().hex
-
-    answer = _invoke_runtime(text, session_id)
-    now = _now_iso()
 
     input_message = dict(message)
     input_message["kind"] = "message"
@@ -229,30 +235,29 @@ def _run_message(params: dict) -> dict:
     input_message["taskId"] = task_id
     input_message.setdefault("messageId", uuid.uuid4().hex)
 
-    agent_message = {
-        "kind": "message",
-        "role": "agent",
-        "messageId": uuid.uuid4().hex,
-        "parts": [{"kind": "text", "text": answer}],
-        "contextId": context_id,
-        "taskId": task_id,
-    }
-
     task = {
         "kind": "task",
         "id": task_id,
         "contextId": context_id,
-        "status": {"state": "completed", "timestamp": now, "message": agent_message},
-        "artifacts": [
-            {
-                "artifactId": uuid.uuid4().hex,
-                "name": "response",
-                "parts": [{"kind": "text", "text": answer}],
-            }
-        ],
-        "history": [input_message, agent_message],
+        "status": {"state": "submitted", "timestamp": _now_iso()},
+        "artifacts": [],
+        "history": [input_message],
     }
-    _store_task(task)
+    _store_task(task, "submitted")
+
+    _sqs.send_message(
+        QueueUrl=QUEUE_URL,
+        MessageBody=json.dumps(
+            {
+                "task_id": task_id,
+                "prompt": text,
+                "runtime_session_id": runtime_session_id,
+                "context_id": context_id,
+                "caller": caller,
+            }
+        ),
+    )
+    logger.info("A2A submitted task=%s context=%s", task_id, context_id)
     return task
 
 
@@ -269,46 +274,15 @@ def _extract_text(parts) -> str:
     return "\n\n".join(chunks).strip()
 
 
-def _invoke_runtime(prompt: str, session_id: str) -> str:
-    payload = json.dumps({"prompt": prompt, "session_id": session_id}).encode("utf-8")
-    resp = _agentcore.invoke_agent_runtime(
-        agentRuntimeArn=AGENT_RUNTIME_ARN,
-        runtimeSessionId=session_id,
-        qualifier=AGENT_RUNTIME_QUALIFIER,
-        contentType="application/json",
-        accept="application/json",
-        payload=payload,
-    )
-    body = resp.get("response")
-    if hasattr(body, "read"):
-        body = body.read()
-    if isinstance(body, (bytes, bytearray)):
-        body = body.decode("utf-8", errors="replace")
-
-    try:
-        data = json.loads(body)
-    except (ValueError, TypeError):
-        return body if isinstance(body, str) else str(body)
-
-    if isinstance(data, dict):
-        return (
-            data.get("response")
-            or data.get("output")
-            or data.get("message")
-            or data.get("completion")
-            or json.dumps(data)
-        )
-    return str(data)
-
-
 # --------------------------------------------------------------------------- #
 # Task store (DynamoDB, TTL)
 # --------------------------------------------------------------------------- #
-def _store_task(task: dict) -> None:
+def _store_task(task: dict, state: str) -> None:
     _tasks.put_item(
         Item={
             "task_id": task["id"],
             "context_id": task.get("contextId", ""),
+            "state": state,
             "task_json": json.dumps(task),
             "expires_at": int(time.time()) + TASK_TTL_SECONDS,
         }
@@ -331,4 +305,37 @@ def _tasks_get(req_id, params):
     history_length = params.get("historyLength")
     if isinstance(history_length, int) and history_length >= 0:
         task["history"] = task.get("history", [])[-history_length:] if history_length else []
+    return _rpc_result(req_id, task)
+
+
+def _tasks_cancel(req_id, params):
+    task = _load_task(params.get("id"))
+    if task is None:
+        return _rpc_error(req_id, TASK_NOT_FOUND, "Task not found or expired")
+    if task["status"]["state"] in TERMINAL:
+        return _rpc_error(
+            req_id, TASK_NOT_CANCELABLE, f"Task is already {task['status']['state']}"
+        )
+
+    task["status"] = {"state": "canceled", "timestamp": _now_iso()}
+    try:
+        _tasks.update_item(
+            Key={"task_id": params["id"]},
+            UpdateExpression="SET #s = :s, task_json = :j",
+            ConditionExpression="attribute_exists(#s) AND NOT (#s IN (:c, :f, :d, :r))",
+            ExpressionAttributeNames={"#s": "state"},
+            ExpressionAttributeValues={
+                ":s": "canceled",
+                ":j": json.dumps(task),
+                ":c": "completed",
+                ":f": "failed",
+                ":d": "canceled",
+                ":r": "rejected",
+            },
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            # Worker finished between our read and write - return the final task.
+            return _rpc_result(req_id, _load_task(params["id"]))
+        raise
     return _rpc_result(req_id, task)

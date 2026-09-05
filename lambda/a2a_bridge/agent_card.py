@@ -22,7 +22,9 @@ AGENT_DESCRIPTION = os.environ.get(
     "AGENT_DESCRIPTION",
     "AI-driven Secure Controls Framework (SCF) 2026.2 compliance assessment: "
     "control lookup, framework mapping, gap analysis, maturity assessment, "
-    "evidence checklists, and questionnaire answers.",
+    "evidence checklists, and questionnaire answers. "
+    "message/send is non-blocking: it returns a Task in the 'submitted' state; "
+    "poll tasks/get until the state is terminal (completed / failed / canceled).",
 )
 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")

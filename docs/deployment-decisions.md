@@ -211,20 +211,34 @@ system prompt. `aws_bedrock_guardrail_version` has
 `replace_triggered_by = [aws_bedrock_guardrail.scf_agent]` so a fresh immutable
 version is cut on every edit and `GUARDRAIL_VERSION` on the runtime tracks it.
 
-## A2A bridge does not stream — on purpose (for now)
+## A2A: async task model, not streaming
 
-The bridge is request/response only: `message/send` runs the agent to completion
-and returns JSON; the Agent Card says `capabilities.streaming = false` and
-`message/stream` / `tasks/resubscribe` return `-32004`. `message/send` still sits
-under API Gateway HTTP API's fixed 30s integration timeout. This is a deliberate
-trade-off for a fully-serverless bridge with API Gateway's native dual-IdP JWT
-authorizers and no custom auth code. Real incremental streaming needs a different
-client-facing transport (Function URL + Lambda Web Adapter, or Fargate + ALB)
-because the Python managed Lambda runtime can't stream and API Gateway HTTP APIs
-buffer + cap at 30s. The full option analysis — async task model, Function URL,
-Fargate, and what token-level streaming additionally needs from the agent — is in
-[`a2a-streaming.md`](a2a-streaming.md). Not implemented; recorded so it's a
-decision later, not a rediscovery.
+`message/send` is **non-blocking**. The bridge Lambda writes a `submitted` Task to
+DynamoDB, enqueues `{task_id, prompt, runtime_session_id, context_id, caller}` on
+SQS, and returns that Task in under a second — it never calls the runtime. An
+SQS-triggered **worker Lambda** (`lambda/a2a_worker`, 600s timeout, event-source
+`maximum_concurrency` cap) sets the Task `working`, calls `InvokeAgentRuntime`,
+and writes `completed` (+ artifact) or `failed`. The client polls `tasks/get`
+until the state is terminal. `tasks/cancel` conditionally marks a non-terminal
+Task `canceled`; the worker's final write is conditional on `state <> "canceled"`.
+
+Why: API Gateway HTTP API has a fixed ~30s integration timeout, so a synchronous
+`message/send` returned `503`/`504` on any turn longer than that (the ISO 42001
+query took 32s). The async model keeps the caller on sub-second requests only, so
+turn length is bounded by the worker's 600s timeout instead. It also adds SQS
+durability + DLQ (`maxReceiveCount` 2) and a concurrency cap on expensive Bedrock
+runs, and it *is* the A2A `Task` lifecycle done properly. Implemented in
+`terraform/a2a-async.tf`.
+
+This is **not** incremental streaming — `capabilities.streaming = false`,
+`message/stream` / `tasks/resubscribe` still return `-32004`, and the caller gets
+the whole answer at once when the Task completes. Real SSE / token deltas need a
+different client-facing transport (Function URL + Lambda Web Adapter, or Fargate +
+ALB) because the Python managed Lambda runtime can't stream and API Gateway HTTP
+APIs buffer + cap at 30s. Those options, and what token-level streaming
+additionally needs from the agent container, are in
+[`a2a-streaming.md`](a2a-streaming.md) — recorded so it's a decision later, not a
+rediscovery.
 
 ## Two-phase apply for self-referential URLs
 

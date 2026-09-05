@@ -20,11 +20,15 @@ graph LR
     Caller["A2A client agent"] -->|"Bearer JWT"| APIGW["API Gateway HTTP API<br/>scf-agent-a2a"]
     APIGW -->|"POST /cognito/rpc"| AuthC{{"JWT authorizer<br/>Cognito"}}
     APIGW -->|"POST /entra/rpc"| AuthE{{"JWT authorizer<br/>Entra ID"}}
-    AuthC --> Bridge["Lambda<br/>scf-agent-a2a-bridge"]
+    AuthC --> Bridge["Lambda<br/>scf-agent-a2a-bridge<br/>submit only"]
     AuthE --> Bridge
     APIGW -->|"GET /*/.well-known/agent-card.json (public)"| Bridge
-    Bridge -->|"InvokeAgentRuntime (SigV4)"| Runtime["AgentCore Runtime<br/>scf_agent_compliance_agent"]
-    Bridge -->|"PutItem / GetItem"| Tasks[("DynamoDB<br/>scf-agent-a2a-tasks<br/>24h TTL")]
+    Bridge -->|"PutItem submitted / GetItem"| Tasks[("DynamoDB<br/>scf-agent-a2a-tasks<br/>24h TTL")]
+    Bridge -->|"SendMessage"| Queue["SQS<br/>scf-agent-a2a-tasks"]
+    Queue -->|"batch 1"| Worker["Lambda<br/>scf-agent-a2a-worker<br/>600s timeout"]
+    Queue -.->|"after 2 tries"| DLQ["SQS<br/>scf-agent-a2a-tasks-dlq"]
+    Worker -->|"InvokeAgentRuntime (SigV4)"| Runtime["AgentCore Runtime<br/>scf_agent_compliance_agent"]
+    Worker -->|"UpdateItem working then completed / failed"| Tasks
 ```
 
 The existing IAM/SigV4 path (`scripts/ask.py`, the AgentCore MCP/HTTP gateways) is
@@ -36,16 +40,26 @@ unchanged — this is additive ingress.
    spec-compliant AgentCard describing the agent, its skills, and the security scheme for
    that route. Public (no token) so clients can learn how to authenticate. A generic card
    listing both schemes is at `GET /.well-known/agent-card.json`.
-2. **`message/send`** — extracts text from `params.message.parts`, calls
-   `bedrock-agentcore:InvokeAgentRuntime`, and returns a **completed `Task`** with the
-   answer as a `text` artifact. The task is stored (24 h TTL) for later `tasks/get`.
-3. **`tasks/get`** — fetches a recently completed task from DynamoDB.
-4. **`message/stream`**, **`tasks/resubscribe`** — **not supported**. The Agent Card
+2. **`message/send`** (non-blocking) — extracts text from `params.message.parts`, writes a
+   `Task {state: "submitted"}` to DynamoDB (24 h TTL), enqueues it on SQS, and returns that
+   `submitted` Task in under a second. It does **not** wait for the agent. A separate worker
+   Lambda (`lambda/a2a_worker`, SQS-triggered, 600 s timeout) picks the task up, sets it
+   `working`, calls `bedrock-agentcore:InvokeAgentRuntime`, and updates the Task to
+   `completed` (answer as a `text` artifact) or `failed`. The `configuration.blocking` flag
+   is ignored — honoring it would re-introduce the 30 s API Gateway timeout.
+3. **`tasks/get`** — reads the Task from DynamoDB. **This is how a client gets the answer:**
+   poll it until `status.state` is terminal (`completed` / `failed` / `canceled`).
+4. **`tasks/cancel`** — marks a non-terminal Task `canceled` (conditional write). A worker
+   that finishes right after a cancel does not overwrite it. Terminal task → `-32002`.
+5. **`message/stream`**, **`tasks/resubscribe`** — **not supported**. The Agent Card
    advertises `capabilities.streaming = false`; these return `-32004`. Use `message/send`,
-   then poll `tasks/get`. See [Streaming notes](#streaming-notes) and
+   then poll `tasks/get`. The async model removes the timeout but does not deliver
+   incremental frames — see [Streaming notes](#streaming-notes) and
    [docs/a2a-streaming.md](a2a-streaming.md).
-5. **`tasks/cancel`**, **`tasks/pushNotificationConfig/*`** — return the standard A2A
-   "unsupported" JSON-RPC errors (`-32002` / `-32003`); execution is synchronous.
+6. **`tasks/pushNotificationConfig/*`** — `-32003` PushNotificationNotSupported.
+
+Caller isolation: the AgentCore `runtimeSessionId` is `sha256(f"{caller}:{contextId}")`, so
+two callers that pass the same `contextId` do not share one AgentCore session.
 
 ## Deploy
 
@@ -62,8 +76,11 @@ terraform output        # collect the a2a_* and cognito_a2a_* values
 `cognito_a2a_domain_prefix` must be a **globally unique** Cognito domain prefix. If
 `terraform apply` fails on the domain, pick another prefix.
 
-The bridge Lambda has **no build step** — Terraform zips `lambda/a2a_bridge/` directly
-(stdlib + the Lambda-provided `boto3` only).
+Neither Lambda has a **build step** — Terraform zips `lambda/a2a_bridge/` and
+`lambda/a2a_worker/` directly (stdlib + the Lambda-provided `boto3` only). The async task
+model (SQS work queue + DLQ + worker) in `terraform/a2a-async.tf` is created automatically
+whenever `enable_a2a = true`; tune it with `a2a_worker_timeout` (default 600 s) and
+`a2a_worker_max_concurrency` (default 5, min 2 — the SQS event-source concurrency cap).
 
 If `entra_tenant_id` is empty, the `/entra/*` routes and authorizer are simply not created;
 everything else still works.
@@ -85,8 +102,8 @@ TOKEN=$(curl -s -u "$CID:$SECRET" \
 # 2. Discover
 curl -s "$(terraform output -raw a2a_cognito_agent_card_url)" | python -m json.tool
 
-# 3. message/send
-curl -s -X POST "$RPC" \
+# 3. message/send — returns immediately with a "submitted" Task; grab result.id
+TASK_ID=$(curl -s -X POST "$RPC" \
   -H "Authorization: Bearer $TOKEN" \
   -H "content-type: application/json" \
   -d '{
@@ -100,11 +117,18 @@ curl -s -X POST "$RPC" \
         "parts": [{ "kind": "text", "text": "Look up SCF control GOV-01 and list the evidence requirements" }]
       }
     }
-  }' | python -m json.tool
+  }' | python -c "import sys,json;print(json.load(sys.stdin)['result']['id'])")
 
-# 4. Fetch it again later (use the id from result.id above)
-curl -s -X POST "$RPC" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
-  -d '{"jsonrpc":"2.0","id":"2","method":"tasks/get","params":{"id":"<TASK_ID>"}}'
+# 4. Poll tasks/get until the state is terminal — this is how you get the answer
+while :; do
+  RESP=$(curl -s -X POST "$RPC" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":\"2\",\"method\":\"tasks/get\",\"params\":{\"id\":\"$TASK_ID\"}}")
+  STATE=$(echo "$RESP" | python -c "import sys,json;print(json.load(sys.stdin)['result']['status']['state'])")
+  echo "state=$STATE"
+  case "$STATE" in completed|failed|canceled|rejected) break;; esac
+  sleep 2
+done
+echo "$RESP" | python -m json.tool   # result.artifacts[0].parts[0].text holds the answer
 ```
 
 ### Cognito — interactive users (hosted UI)
@@ -174,8 +198,12 @@ sequenceDiagram
 
     User->>CLI: type a prompt
     CLI->>API: message send, with the access token
-    API-->>CLI: completed task with the answer
-    CLI-->>User: print the answer
+    API-->>CLI: submitted task, with a task id
+    loop every 2s until terminal
+        CLI->>API: tasks get, task id
+        API-->>CLI: submitted or working or completed
+    end
+    CLI-->>User: print the answer from the completed task
     Note over User,CLI: interactive mode repeats this, reusing the same contextId
 ```
 
@@ -217,12 +245,16 @@ The default issuer is the v2.0 endpoint
 
 ### Call it
 
-Identical to the Cognito example, but hit `a2a_entra_rpc_url` with the Entra token:
+Identical to the Cognito example (submit, then poll `tasks/get`), but hit
+`a2a_entra_rpc_url` with the Entra token:
 
 ```bash
 RPC=$(terraform output -raw a2a_entra_rpc_url)
+TASK_ID=$(curl -s -X POST "$RPC" -H "Authorization: Bearer $ENTRA_TOKEN" -H "content-type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user","messageId":"m1","parts":[{"kind":"text","text":"What SCF controls map to HIPAA?"}]}}}' \
+  | python -c "import sys,json;print(json.load(sys.stdin)['result']['id'])")
 curl -s -X POST "$RPC" -H "Authorization: Bearer $ENTRA_TOKEN" -H "content-type: application/json" \
-  -d '{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user","messageId":"m1","parts":[{"kind":"text","text":"What SCF controls map to HIPAA?"}]}}}'
+  -d "{\"jsonrpc\":\"2.0\",\"id\":\"2\",\"method\":\"tasks/get\",\"params\":{\"id\":\"$TASK_ID\"}}"   # repeat until state is terminal
 ```
 
 ## Using an A2A SDK client
@@ -245,7 +277,11 @@ async def main():
         req = SendMessageRequest(params=MessageSendParams(
             message=Message(role="user", messageId="m1",
                             parts=[TextPart(text="Assess our GOV domain maturity against SCR-CMM Level 3")])))
-        print((await client.send_message(req)).model_dump(exclude_none=True))
+        # message/send is non-blocking: this Task comes back "submitted".
+        task = (await client.send_message(req)).root.result
+        # Poll tasks/get until terminal. (a2a-sdk: client.get_task(TaskQueryParams(id=task.id)))
+        # The answer is on the completed task's artifacts[0].parts[0].text.
+        print(task.model_dump(exclude_none=True))
 
 asyncio.run(main())
 ```
@@ -256,24 +292,28 @@ This bridge **does not stream**. The Agent Card advertises
 `capabilities.streaming = false`, and `message/stream` / `tasks/resubscribe` return a
 JSON-RPC `-32004` error. Two AWS limits make real streaming impossible on this transport:
 API Gateway HTTP APIs buffer a Lambda-proxy response and cap it at **30 s**, and the Python
-*managed* Lambda runtime can't stream a response body at all. `message/send` for a long
-query (full gap analysis, multi-step report) can therefore also `504` at 30 s.
+*managed* Lambda runtime can't stream a response body at all.
 
-This is a deliberate trade-off for a simple, fully-serverless bridge with native dual-IdP
-JWT auth. To add real incremental streaming or lift the 30 s ceiling, see
-**[docs/a2a-streaming.md](a2a-streaming.md)** — it lays out the async-task, Lambda Function
-URL + Lambda Web Adapter, and Fargate options with their trade-offs, plus what token-level
-streaming additionally requires from the agent container.
+The **async task model** works around the 30 s cap for *getting an answer*: `message/send`
+returns a `submitted` Task in under a second, an SQS-triggered worker Lambda (600 s timeout)
+runs the agent out of band, and the client polls `tasks/get`. A long query (full gap
+analysis, multi-step report) no longer fails at 30 s — but the caller still receives the
+whole answer at once when the task reaches `completed`, not incrementally.
+
+To add real incremental (SSE) delivery or token-level streaming, see
+**[docs/a2a-streaming.md](a2a-streaming.md)** — it marks the async model as implemented and
+lays out the Lambda Function URL + Lambda Web Adapter and Fargate options with their
+trade-offs, plus what token-level streaming additionally requires from the agent container.
 
 ## Supported / unsupported methods
 
 | Method | Status |
 |--------|--------|
-| `message/send` | ✅ returns a completed `Task` |
-| `tasks/get` | ✅ from the 24 h task store |
+| `message/send` | ✅ non-blocking — returns a `submitted` `Task`; the worker runs the turn |
+| `tasks/get` | ✅ from the 24 h task store — **poll this until terminal to get the answer** |
+| `tasks/cancel` | ✅ marks a non-terminal `Task` `canceled`; terminal task → `-32002` |
 | `message/stream` | ⛔ `-32004` — `capabilities.streaming = false`; use `message/send` + `tasks/get` |
 | `tasks/resubscribe` | ⛔ `-32004` — no stream to resubscribe to |
-| `tasks/cancel` | ⛔ `-32002` TaskNotCancelable (synchronous execution) |
 | `tasks/pushNotificationConfig/*` | ⛔ `-32003` PushNotificationNotSupported |
 | unknown | ⛔ `-32601` MethodNotFound |
 
@@ -285,4 +325,6 @@ streaming additionally requires from the agent container.
 | `401` on a Cognito M2M token that looks valid | Cognito client_credentials tokens have no `aud`; API Gateway matches `client_id`. The Terraform already lists both client IDs as audiences — re-`apply` if you rotated a client. |
 | `terraform apply` fails creating `aws_cognito_user_pool_domain` | `cognito_a2a_domain_prefix` is already taken globally. Choose another. |
 | Agent Card `url` shows `execute-api` but you want a vanity host | Set `a2a_custom_domain` (and manage the domain name + ACM cert + API mapping separately). |
-| `500` / JSON-RPC `-32603` | Check `/aws/lambda/scf-agent-a2a-bridge` logs. Usually the AgentCore Runtime rejected the call (model access, cold start > timeout). |
+| `message/send` returns `-32603` | Check `/aws/lambda/scf-agent-a2a-bridge` logs — the submit path only touches DynamoDB + SQS, so this is a permissions or table/queue-name problem, not the agent. |
+| `tasks/get` stays `working` forever | The worker crashed or timed out. Check `/aws/lambda/scf-agent-a2a-worker` logs; after `maxReceiveCount` (2) the SQS message lands in `scf-agent-a2a-tasks-dlq` (`terraform output a2a_tasks_dlq_url`). A handled agent error instead sets the task to `failed` with the error text in `status.message`. |
+| Task goes straight to `failed` | The worker ran but `InvokeAgentRuntime` errored (model access, guardrail block, runtime cold start). `status.message.parts[0].text` has the detail; full trace in the worker log. |

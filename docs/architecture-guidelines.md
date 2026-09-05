@@ -9,9 +9,13 @@ graph TD
         WebUI["Hosted Streamlit UI<br/>CloudFront - ALB - Fargate<br/>Cognito login"]
         A2A["A2A clients - other agents"]
         APIGW["API Gateway HTTP API<br/>Cognito / Entra JWT authorizers"]
-        Bridge["A2A Bridge Lambda"]
+        Bridge["A2A Bridge Lambda<br/>submit only"]
+        Queue["SQS work queue + DLQ"]
+        Worker["A2A Worker Lambda<br/>600s timeout"]
         A2A -->|"Bearer JWT"| APIGW
         APIGW --> Bridge
+        Bridge -->|"SendMessage"| Queue
+        Queue -->|"batch 1"| Worker
     end
 
     subgraph "AgentCore Runtime (ARM64 Container)"
@@ -60,8 +64,9 @@ graph TD
 
     CLI -->|"SigV4"| Agent
     WebUI -->|"InvokeAgentRuntime"| Agent
-    Bridge -->|"InvokeAgentRuntime"| Agent
-    Bridge --> A2ATasks["🗄️ DynamoDB<br/>A2A tasks - 24h TTL"]
+    Worker -->|"InvokeAgentRuntime"| Agent
+    Bridge -->|"PutItem submitted / GetItem"| A2ATasks["🗄️ DynamoDB<br/>A2A tasks - 24h TTL"]
+    Worker -->|"UpdateItem working then completed"| A2ATasks
 
     Agent --> T1 & T2 & T3 & T4
     Agent --> T5 & T6
@@ -187,17 +192,23 @@ Document uploaded to S3
   OR: Reviewer clicks Delete → removed from DB (audit log preserves record)
 ```
 
-### Pattern 10: Incoming A2A Request
+### Pattern 10: Incoming A2A Request (async task model)
 ```
 Another agent discovers + calls this one
   1. GET  {api}/{cognito|entra}/.well-known/agent-card.json  (public) → capabilities + auth scheme
   2. Caller obtains a bearer token from its IdP (Cognito client_credentials, or Entra)
-  3. POST {api}/{prefix}/rpc  with  Authorization: Bearer <jwt>
+  3. POST {api}/{prefix}/rpc  message/send  with  Authorization: Bearer <jwt>
   4. API Gateway JWT authorizer validates issuer + audience/client_id BEFORE Lambda runs
-  5. Bridge Lambda maps JSON-RPC → InvokeAgentRuntime, wraps the result as an A2A Task
-  6. Task is stored (24h TTL) so tasks/get works afterwards
-  method=message/send → JSON Task ; message/stream / tasks/resubscribe → -32004
-  (capabilities.streaming=false; see docs/a2a-streaming.md)
+  5. Bridge Lambda writes Task{state:submitted} → DynamoDB, SendMessage → SQS, returns
+     that Task in <1s (never runs the agent — stays under the 30s API GW cap)
+  6. SQS-triggered worker Lambda (600s timeout): UpdateItem working →
+     InvokeAgentRuntime → UpdateItem completed + artifact (or failed).
+     Infra crash/timeout → SQS redrive → DLQ after maxReceiveCount 2
+  7. Caller polls POST {api}/{prefix}/rpc  tasks/get {id}  until state is terminal
+     (completed / failed / canceled) and reads artifacts[0].parts[0].text
+  tasks/cancel → marks a non-terminal Task canceled (conditional write)
+  message/stream / tasks/resubscribe → -32004 (capabilities.streaming=false;
+  the async model removes the timeout but is not incremental — see docs/a2a-streaming.md)
 ```
 
 ## Design Principles
@@ -239,8 +250,10 @@ Another agent discovers + calls this one
 | ECR (agent / frontend) | Container images | No limit | Storage |
 | MCP Gateway + Web Search | Live internet access | 200 char query | Per-search |
 | Bedrock Guardrail | Prompt-attack + PII + harmful-security filtering | N/A | Per-invocation |
-| A2A HTTP API + bridge Lambda | Incoming A2A (JSON-RPC) with Cognito/Entra JWT auth | 30s API GW integration timeout | Per-request |
-| A2A task store (DynamoDB) | Completed A2A tasks for `tasks/get` | 24h TTL | Per-request |
+| A2A HTTP API + bridge Lambda | Incoming A2A (JSON-RPC) with Cognito/Entra JWT auth; `message/send` submit only | 30s API GW integration timeout (submit stays well under) | Per-request |
+| A2A SQS work queue + DLQ | Hands submitted tasks to the worker; DLQ after `maxReceiveCount` 2 | 1h retention (work) / 14d (DLQ) | Per-request |
+| A2A worker Lambda | Runs one agent turn out of band, updates the task `working`→`completed`/`failed` | 600s timeout; concurrency cap `a2a_worker_max_concurrency` (5) | Per-invocation |
+| A2A task store (DynamoDB) | A2A task lifecycle records for `tasks/get` polling | 24h TTL | Per-request |
 | Frontend (Fargate + ALB + CloudFront) | Hosted Streamlit UI, Cognito login | WebSocket via CloudFront | ALB + task always-on (~$25-35/mo) |
 | Lambda (Auto-updater) | Weekly SCF version check | 5-min timeout | Per-invocation |
 | Lambda (Textract pipeline) | OCR extraction from uploads | 15-min timeout | Per-invocation |
@@ -259,8 +272,10 @@ graph LR
     UI["Browser"] -->|"HTTPS + Cognito OIDC"| CF["CloudFront - ALB - Fargate<br/>Streamlit, fail-closed login"]
     CF -->|"InvokeAgentRuntime"| Runtime
     Agent["Other agent"] -->|"Bearer JWT, A2A"| APIGW["API Gateway HTTP API"]
-    APIGW -->|"Cognito / Entra ID<br/>JWT authorizer"| Bridge["A2A Bridge Lambda"]
-    Bridge -->|"InvokeAgentRuntime"| Runtime
+    APIGW -->|"Cognito / Entra ID<br/>JWT authorizer"| Bridge["A2A Bridge Lambda<br/>submit only"]
+    Bridge -->|"SendMessage"| Queue["SQS work queue + DLQ"]
+    Queue -->|"batch 1"| Worker["A2A Worker Lambda"]
+    Worker -->|"InvokeAgentRuntime"| Runtime
 
     Runtime -->|"execution_role"| Role["IAM Role"]
     Runtime -->|"guardrailConfig"| GR["Bedrock Guardrail<br/>prompt-attack, PII, harmful-security"]
@@ -274,6 +289,7 @@ graph LR
     style Role fill:#dd3522,color:#fff
     style APIGW fill:#c925d1,color:#fff
     style Bridge fill:#c925d1,color:#fff
+    style Worker fill:#c925d1,color:#fff
 ```
 
 - **Three ingress paths, three auth models:**
@@ -282,9 +298,12 @@ graph LR
     CloudFront injects a secret `X-Origin-Verify` header and the ALB 403s anything without it
   - A2A ingress — OAuth2 / OIDC bearer JWT (Amazon Cognito or Microsoft Entra ID),
     validated by a native API Gateway JWT authorizer *before* the bridge Lambda runs
-- Agent runtime role has least-privilege per-resource policies; the A2A bridge and the
-  frontend task each have their own minimal roles (`InvokeAgentRuntime` + the one table
-  they touch)
+- Agent runtime role has least-privilege per-resource policies; the A2A bridge, the A2A
+  worker, and the frontend task each have their own minimal roles. The bridge only reads/
+  writes the task table + `sqs:SendMessage`; **only the worker holds
+  `bedrock-agentcore:InvokeAgentRuntime`** on the A2A path (+ consume the work queue)
+- The A2A `runtimeSessionId` is `sha256(caller_id + ":" + contextId)`, so two callers
+  passing the same `contextId` cannot share one AgentCore session
 - The runtime applies a Bedrock Guardrail on every model call. **Bedrock topic policies
   are evaluated against the model OUTPUT as well as the input** — a broad "off-topic" DENY
   topic was removed because the classifier blocked the agent's own on-topic answers; the
@@ -303,7 +322,8 @@ graph LR
 | ARM64 container builds are slow | QEMU emulation on x86 | Use `--only-binary` wheels; future: CI/CD on native ARM64 |
 | ARM64 builds silently produce a **stale** image | QEMU `binfmt` handlers not registered → cross-arch `RUN` steps fail with `exec /bin/sh: exec format error`, or a cached build is reused | `docker run --privileged --rm tonistiigi/binfmt --install arm64`, then rebuild `--no-cache`; verify the image content before rolling |
 | Streamlit can't run on AWS App Runner | App Runner has no WebSocket support | Frontend runs on Fargate + ALB + CloudFront instead (`terraform/frontend.tf`) |
-| A2A `message/send` can exceed 30s | API Gateway HTTP API integration timeout is a hard 30s; the bridge does not stream (`capabilities.streaming=false` — Python managed Lambda can't stream, API GW buffers + caps at 30s) | Keep queries scoped for now. Options to lift this (async task model, Function URL + Lambda Web Adapter, Fargate) with trade-offs: [docs/a2a-streaming.md](a2a-streaming.md) |
+| A2A has no incremental / token streaming | `capabilities.streaming=false` — API GW buffers + caps a Lambda-proxy response at 30s, and the Python managed Lambda runtime can't stream a body | Getting an answer is solved: `message/send` is async (submit → SQS worker → poll `tasks/get`), so a long turn no longer times out. Real SSE / token deltas still need Function URL + Lambda Web Adapter or Fargate — trade-offs in [docs/a2a-streaming.md](a2a-streaming.md) |
+| A2A worker turn capped at 600s | `a2a_worker_timeout` (Lambda hard max 900s) | Raise `a2a_worker_timeout`; a turn that still overruns → task retries then lands in the DLQ (`a2a_tasks_dlq_url`) |
 | Bedrock topic policies block valid output | Topic DENY rules are applied to the model response, not just the prompt | Keep topic rules narrow (harmful only); do off-topic filtering in app code / system prompt |
 | AgentCore Gateway target provider bug | Provider omits the `credential_provider_configuration` the API always returns | Declare `credential_provider_configuration { gateway_iam_role {} }` in the resource (done in `main.tf`) |
 | Model must use inference profile ID | Bedrock on-demand requirement | Use `us.anthropic.*` not `anthropic.*`; run preflight.py to validate |

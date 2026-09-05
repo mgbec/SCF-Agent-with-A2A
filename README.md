@@ -11,9 +11,13 @@ graph TD
     CLI["CLI / scripts<br/>ask.py, generate_report.py"] -->|"AWS IAM SigV4"| Runtime["AgentCore Runtime<br/>Strands Agent + Claude Sonnet 4.6<br/>+ Bedrock Guardrail"]
     Web["Hosted UI<br/>CloudFront - ALB - Fargate<br/>Streamlit + Cognito login"] -->|"InvokeAgentRuntime"| Runtime
     A2A["Other agents<br/>A2A JSON-RPC + Agent Card"] -->|"Bearer JWT"| APIGW["API Gateway HTTP API<br/>Cognito / Entra ID authorizers"]
-    APIGW --> Bridge["A2A Bridge Lambda"]
-    Bridge -->|"InvokeAgentRuntime"| Runtime
-    Bridge --> Tasks["DynamoDB<br/>A2A tasks, 24h TTL"]
+    APIGW --> Bridge["A2A Bridge Lambda<br/>submit only"]
+    Bridge -->|"SendMessage"| Queue["SQS work queue + DLQ"]
+    Queue -->|"batch 1"| Worker["A2A Worker Lambda<br/>600s timeout"]
+    Worker -->|"InvokeAgentRuntime"| Runtime
+    Bridge -->|"write submitted"| Tasks["DynamoDB<br/>A2A tasks, 24h TTL"]
+    Worker -->|"update working then completed"| Tasks
+    A2A -.->|"poll tasks/get"| APIGW
 
     Runtime -->|"1. Discovery"| KB["Bedrock KB<br/>S3 Vectors<br/>Semantic Search"]
     Runtime -->|"2. Full Details"| DDB["DynamoDB<br/>SCF Controls<br/>1,534 items"]
@@ -40,6 +44,8 @@ graph TD
     style Ingest fill:#8c4fff,color:#fff
     style APIGW fill:#c925d1,color:#fff
     style Bridge fill:#c925d1,color:#fff
+    style Worker fill:#c925d1,color:#fff
+    style Queue fill:#c925d1,color:#fff
     style Web fill:#2e73b8,color:#fff
 ```
 
@@ -280,11 +286,16 @@ with its own JWT authorizer:
 | `POST /cognito/rpc` | Amazon Cognito (M2M client_credentials **and** hosted-UI users) |
 | `POST /entra/rpc` | Microsoft Entra ID (optional — set `entra_tenant_id`) |
 
+`message/send` is **non-blocking**: it returns a `submitted` Task, an SQS-triggered worker
+Lambda (600s timeout) runs the agent out of band, and the caller polls `tasks/get` until
+the state is terminal. This keeps long turns from hitting API Gateway's 30s cap; it is not
+incremental streaming (`capabilities.streaming = false`).
+
 ```powershell
 cd terraform
 terraform apply
 terraform output a2a_cognito_agent_card_url   # discover
-terraform output a2a_cognito_rpc_url           # call
+terraform output a2a_cognito_rpc_url           # call: message/send, then poll tasks/get
 ```
 
 Full setup, token recipes, Entra app-registration steps, and sample calls are in
@@ -397,7 +408,8 @@ scf-compliance-agent/
 │   ├── main.tf                 # Core infra (KB, Runtime, Gateway, S3, ECR, IAM)
 │   ├── guardrails.tf           # Bedrock Guardrail + immutable version
 │   ├── scf-updater.tf         # Auto-update pipeline (Lambda, EventBridge, SNS)
-│   ├── a2a.tf                  # A2A ingress (API Gateway, JWT authorizers, bridge Lambda)
+│   ├── a2a.tf                  # A2A ingress (API Gateway, JWT authorizers, submit bridge Lambda, task table)
+│   ├── a2a-async.tf            # Async task model (SQS work queue + DLQ, worker Lambda, event-source mapping)
 │   ├── cognito-a2a.tf          # Cognito user pool + M2M / hosted-UI clients for A2A
 │   ├── frontend.tf             # Hosted Streamlit: ECS Fargate + ALB + CloudFront + Cognito client
 │   ├── deploy-operator-policy.tf # Managed IAM policy for whoever runs the deploy scripts
@@ -425,9 +437,11 @@ scf-compliance-agent/
 │   │   └── handler.py          # DynamoDB Stream → answer audit log
 │   ├── textract_pipeline/
 │   │   └── handler.py          # OCR extraction from uploaded documents
-│   └── a2a_bridge/
-│       ├── handler.py          # A2A JSON-RPC ↔ AgentCore Runtime bridge
-│       └── agent_card.py       # Builds the per-route A2A Agent Card
+│   ├── a2a_bridge/
+│   │   ├── handler.py          # A2A JSON-RPC submit: write task + enqueue on SQS, poll/cancel
+│   │   └── agent_card.py       # Builds the per-route A2A Agent Card
+│   └── a2a_worker/
+│       └── worker.py           # SQS-triggered: runs one A2A task, InvokeAgentRuntime, updates the task
 ├── scripts/
 │   ├── ask.py                  # CLI query tool (interactive + single-shot)
 │   ├── generate_report.py      # Multi-step report generator
@@ -456,7 +470,7 @@ scf-compliance-agent/
 │   ├── architecture-guidelines.md
 │   ├── deployment-decisions.md
 │   ├── a2a-integration.md          # A2A auth setup, token recipes, sample calls
-│   ├── a2a-streaming.md            # Options + trade-offs for true streaming / lifting the 30s cap
+│   ├── a2a-streaming.md            # Async task model (implemented) + options for true incremental streaming
 │   ├── frontend-deployment.md      # Fargate + ALB + CloudFront runbook
 │   ├── deploying-security-updates.md # Guardrail + prompt hardening + frontend auth runbook
 │   ├── troubleshooting.md
@@ -488,8 +502,10 @@ scf-compliance-agent/
 | HTTP Gateway | `aws_bedrockagentcore_gateway` | Routes traffic to the agent runtime |
 | A2A HTTP API | `aws_apigatewayv2_api` | Incoming A2A (Agent-to-Agent) connections |
 | A2A JWT Authorizers | `aws_apigatewayv2_authorizer` | Cognito + Entra ID token validation |
-| A2A Bridge Lambda | `aws_lambda_function` | Translates A2A JSON-RPC → `InvokeAgentRuntime` |
-| A2A Task Store | `aws_dynamodb_table` | Completed A2A tasks, 24h TTL (`tasks/get`) |
+| A2A Bridge Lambda | `aws_lambda_function` | A2A JSON-RPC submit: writes a `submitted` task + enqueues it; serves `tasks/get` / `tasks/cancel` |
+| A2A Work Queue + DLQ | `aws_sqs_queue` | Hands submitted tasks to the worker; DLQ after 2 failed attempts |
+| A2A Worker Lambda | `aws_lambda_function` | SQS-triggered; runs one turn via `InvokeAgentRuntime`, updates the task `working`→`completed`/`failed` (600s timeout) |
+| A2A Task Store | `aws_dynamodb_table` | A2A task lifecycle records, 24h TTL — polled via `tasks/get` |
 | Cognito User Pool | `aws_cognito_user_pool` | Shared identity provider for the A2A Cognito route + the hosted UI |
 | ECR Repository (agent) | `aws_ecr_repository` | Agent container images (ARM64) |
 | ECR Repository (frontend) | `aws_ecr_repository` | Streamlit frontend images (x86_64) |
@@ -532,6 +548,8 @@ scf-compliance-agent/
 | `entra_audience` | Expected `aud` for Entra tokens (App ID URI or client ID) | `""` |
 | `entra_issuer_override` | Force a non-default Entra issuer (e.g. v1.0 `sts.windows.net`) | `""` |
 | `a2a_custom_domain` | Vanity host for the A2A Agent Card URLs (DNS/cert managed elsewhere) | `""` |
+| `a2a_worker_timeout` | Max seconds the async A2A worker may run one agent turn (Lambda hard max 900) | `600` |
+| `a2a_worker_max_concurrency` | Max concurrent async A2A worker invocations (SQS event-source cap; min 2) | `5` |
 | `enable_frontend` | Host the Streamlit UI on Fargate + ALB + CloudFront (needs `enable_a2a`) | `true` |
 | `frontend_base_url` | Public HTTPS base URL of the frontend; set to the `frontend_url` output on the 2nd apply | `""` |
 

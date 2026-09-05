@@ -1,44 +1,63 @@
 # A2A streaming & long-run requests — options and trade-offs
 
-The A2A bridge today is deliberately simple: **API Gateway HTTP API → one Lambda →
-`InvokeAgentRuntime`**, with `tasks/get` backed by a 24-hour DynamoDB table. That
-shape has one limitation worth understanding, and several ways to lift it. This
-doc records the analysis so a future change is a decision, not a rediscovery.
+The A2A bridge is **API Gateway HTTP API → submit Lambda → SQS → worker Lambda →
+`InvokeAgentRuntime`**, with `tasks/get` backed by a 24-hour DynamoDB table.
+`message/send` is non-blocking: it returns a `submitted` Task and the client polls
+`tasks/get`. This doc records the analysis behind that design, and the options for
+adding *real incremental streaming* on top of it, so a future change is a
+decision, not a rediscovery.
 
-**Nothing here is deployed.** The current setup stays as-is until someone
-deliberately picks an option below.
+**Option A (async task model) is implemented** — see §2. Options B and C (real
+SSE) are not deployed; the async model stays as-is until someone picks one.
 
 ---
 
-## 1. Current behaviour, and why
+## 1. Current behavior, and why
 
-The bridge (`lambda/a2a_bridge/handler.py`) is **request/response only**:
-`message/send` runs the agent to completion and returns the `Task` as JSON. The
-Agent Card advertises `capabilities.streaming = false`, and `message/stream` /
-`tasks/resubscribe` return a JSON-RPC `-32004`.
+The bridge (`lambda/a2a_bridge/handler.py`) is **submit-only**: `message/send`
+writes a `Task {state: "submitted"}`, enqueues it on SQS, and returns that Task in
+under a second. A separate worker Lambda (`lambda/a2a_worker/worker.py`, SQS-
+triggered, 600 s timeout) runs the agent and advances the Task
+`working → completed / failed` in the same DynamoDB table. The client polls
+`tasks/get` until the state is terminal — that is how it gets the answer.
+`tasks/cancel` marks a non-terminal Task `canceled` (best effort).
 
-Two hard AWS limits force this:
+The Agent Card still advertises `capabilities.streaming = false`, and
+`message/stream` / `tasks/resubscribe` return a JSON-RPC `-32004`: the async model
+removes the timeout but does **not** deliver incremental frames.
+
+Two hard AWS limits shaped this:
 
 | Limit | Effect |
 |---|---|
-| **API Gateway HTTP API integration timeout is a fixed 30 s** (not configurable, applies to every integration type) | Any turn that takes longer than ~30 s returns `504` to the caller — even though the Lambda keeps running and stores the task |
-| **The Python *managed* Lambda runtime cannot stream a response body** | A Lambda-proxy response is fully buffered before the client sees byte one — so "streaming" over this path can only ever be fake |
+| **API Gateway HTTP API integration timeout is a fixed 30 s** (not configurable, applies to every integration type) | A synchronous `message/send` that ran the whole turn returned `503`/`504` to the caller once a turn passed ~30 s — even though the Lambda kept running and stored the task. The async model sidesteps this: the caller only ever waits on a sub-second submit and on short `tasks/get` polls. |
+| **The Python *managed* Lambda runtime cannot stream a response body** | A Lambda-proxy response is fully buffered before the client sees byte one — so real "streaming" over the API Gateway path is impossible without Option B/C. |
 
-What works well today and shouldn't be lost:
+What the async model gives you:
 
-- Short/medium queries (most control lookups, framework mappings, targeted gap
-  questions) finish inside 30 s.
-- `tasks/get` retrieves a completed task from the store for 24 h — a caller that
-  got cut off can still collect the result *if it has the task id* (see the
-  caveat in §7).
+- No turn length limit for *getting an answer* — the worker has its own 600 s
+  timeout, independent of the 30 s API Gateway cap.
+- `tasks/get` retrieves the task from the store for 24 h — a caller that got cut
+  off can still collect the result *if it has the task id* (it does: `message/send`
+  returns it before any agent work starts).
 - Auth is **API Gateway's native JWT authorizers** (Cognito + Entra ID), one per
-  route, zero custom code.
+  route, zero custom code — unchanged by the async model.
+- SQS redelivery + DLQ (`maxReceiveCount` 2) for infra failures; the SQS event-
+  source `maximum_concurrency` caps concurrent (expensive) Bedrock runs.
 - Unsupported methods return clean JSON-RPC errors, and the card doesn't claim a
   capability the bridge doesn't have.
 
+What it does **not** give you: incremental delivery. A slow query shows
+`submitted` then `working` then the whole answer at once. See §2's progress
+variant, or Options B/C, if that matters.
+
 ---
 
-## 2. Option A — async task model (SQS + worker + poll)
+## 2. Option A — async task model (SQS + worker + poll) — **IMPLEMENTED**
+
+Deployed in `terraform/a2a-async.tf` (+ edits to `terraform/a2a.tf`). Code:
+`lambda/a2a_bridge/handler.py` (submit) and `lambda/a2a_worker/worker.py`
+(worker).
 
 ```
 POST /{prefix}/rpc  (message/send, non-blocking)
@@ -49,29 +68,41 @@ POST /{prefix}/rpc  (message/send, non-blocking)
      ▼
  202 / Task{state:"submitted"}  ──►  client
 
- SQS ──► worker Lambda  (timeout up to 15 min, reserved concurrency)
+ SQS ──► worker Lambda  (timeout 600 s, event-source maximum_concurrency)
           • DynamoDB  state:"working"
           • InvokeAgentRuntime
           • DynamoDB  state:"completed" | "failed" + artifact
-          • on error: SQS retry → DLQ after N attempts
+                      (conditional on state <> "canceled")
+          • on error: SQS retry → DLQ after maxReceiveCount 2
 
  client polls  POST /{prefix}/rpc  {method:"tasks/get", params:{id}}
    submitted / working → keep polling
-   completed / failed  → done
+   completed / failed / canceled → done
 ```
 
 - **Fixes the timeout completely.** No connection is held for more than a poll.
 - **Keeps API Gateway's native Cognito/Entra authorizers** — no auth code.
-- **Durability & backpressure for free:** SQS redelivery + DLQ; reserved
-  concurrency on the worker caps concurrent (expensive) Bedrock runs.
+- **Durability & backpressure for free:** SQS redelivery + DLQ; the event-source
+  mapping's `scaling_config.maximum_concurrency` (`a2a_worker_max_concurrency`,
+  default 5, min 2) caps concurrent (expensive) Bedrock runs *without* reserving
+  account concurrency — the account's unreserved pool is small, so
+  `reserved_concurrent_executions` on the worker is not used.
 - **It is the A2A `Task` lifecycle** (`submitted → working → completed`, client
-  polls `tasks/get`). `capabilities.streaming` is already `false` — this option
-  just makes `message/send` non-blocking instead of the client waiting on it.
+  polls `tasks/get`). `capabilities.streaming` is `false` — this option just makes
+  `message/send` non-blocking instead of the client waiting on it.
+- **`tasks/cancel` works:** a non-terminal Task is conditionally set `canceled`;
+  the worker's final write is conditional on `state <> "canceled"`, so a worker
+  that finishes just after a cancel logs a swallowed `ConditionalCheckFailedException`
+  and does not clobber the `canceled` state.
+- **Caller isolation:** the AgentCore `runtimeSessionId` is
+  `sha256(f"{caller}:{context_id}")` (64 hex), so two callers passing the same
+  `contextId` no longer share one AgentCore session. The `contextId` returned to
+  the client is unchanged.
 - Cost: polling latency (≤ the poll interval at the tail); a handful of extra
   API GW + Lambda + DynamoDB reads per request.
-- New resources: submit Lambda + worker Lambda + SQS queue + DLQ + event-source
-  mapping + their IAM. Each piece is simple; there's no LWA / Function URL / JWT
-  code.
+- Resources added: SQS work queue + DLQ, worker Lambda + role/policy + log group,
+  event-source mapping. `message/send` reuses the existing bridge Lambda. No LWA /
+  Function URL / in-app JWT code.
 
 **Progress variant.** Have the worker write incremental `status.message` text
 (or stage markers, if the agent ever exposes stages) into the task record between
@@ -178,7 +209,7 @@ container itself to stream**:
   `append: true`, ending with `lastChunk: true` + `completed`.
 - Operational cost: an **ARM64 image rebuild** (`binfmt` is already registered on
   the build host — see `troubleshooting.md`), an `agent/update-runtime.ps1` roll,
-  and a **retest of guardrail behaviour under streaming**
+  and a **retest of guardrail behavior under streaming**
   (`guardrail_stream_processing_mode`; a blocked guardrail mid-stream must produce
   a clean SSE error frame, not a truncated artifact).
 
@@ -188,37 +219,35 @@ container itself to stream**:
 
 | If "streaming" means… | Do |
 |---|---|
-| "stop 504-ing on long queries" | **Option A** |
-| "let the caller watch progress" | **Option A + the progress variant** (§2) |
-| "true incremental SSE frames" | **Option B** (or C) |
-| "true model-token stream" | **Option B/C + §6** |
+| "stop timing out on long queries" | **Option A** — done |
+| "let the caller watch progress" | **Option A + the progress variant** (2) — not done |
+| "true incremental SSE frames" | **Option B** (or C) — not done |
+| "true model-token stream" | **Option B/C + 6** — not done |
 
 Effort / risk, low → high: **A < B < C < (B or C) + tokens**.
 
-Whatever is chosen, also fix the two smaller issues the same code touches:
+Two smaller issues that Option A already fixed in passing:
 
-- **Caller isolation.** `_run_message` maps the caller's `contextId` straight
-  onto the AgentCore `runtimeSessionId`; two callers passing the same `contextId`
-  share one session. Namespace it as `hash(caller_id + contextId)` —
-  `_caller_id()` already computes the identity and currently only logs it.
-- **`tasks/get` after a drop.** A client that gets cut off before receiving the
-  response never learns the `task_id`, so it can't poll. Return the `task_id`
-  early (Option A does this by design; for B, emit it in the first `working`
-  frame — the bridge already generates it up front).
+- **Caller isolation** — done. The AgentCore `runtimeSessionId` is now
+  `_sha_session(caller, context_id)` = `sha256(f"{caller}:{context_id}")` in both
+  `handler.py` and `worker.py`, so two callers passing the same `contextId` no
+  longer share one AgentCore session.
+- **`tasks/get` after a drop** — done. `message/send` returns the `task_id` before
+  any agent work starts, so a client that is cut off mid-poll can still resume.
 
 ---
 
 ## 8. Comparison matrix
 
-| | Current | A — async + poll | B — Function URL + LWA | C — Fargate + ALB |
+| | ~~Sync (was)~~ | **A — async + poll (now)** | B — Function URL + LWA | C — Fargate + ALB |
 |---|---|---|---|---|
-| 30 s timeout removed | ❌ | ✅ | ✅ (≤ 15 min) | ✅ (≤ ALB idle) |
+| 30 s timeout removed | ❌ | ✅ (worker 600 s) | ✅ (≤ 15 min) | ✅ (≤ ALB idle) |
 | Incremental delivery to caller | ❌ buffered | ❌ poll | ✅ SSE | ✅ SSE |
 | Model-token deltas | ❌ | ❌ | only with §6 | only with §6 |
 | Auth | API GW JWT authorizer | API GW JWT authorizer | **in-app JWT** | **in-app JWT** |
 | Packaging | zip Lambda | zip Lambdas | container + LWA | container + task defs |
 | Durability / retries | none | **SQS + DLQ** | none | none |
-| Backpressure / concurrency cap | none | **worker reserved concurrency** | none | task count |
+| Backpressure / concurrency cap | none | **event-source `maximum_concurrency`** | none | task count |
 | A2A spec fit | method → JSON/SSE on one URL | `Task` lifecycle (blessed) | per-method endpoint split | per-method endpoint split |
 | Idle cost | \$0 | \$0 | \$0 | ~\$9/mo |
-| New resources | — | 2 Lambda + SQS + DLQ | 1 Lambda + ECR + Function URL | ECS svc + TG + listener rule |
+| New resources | — | worker Lambda + SQS + DLQ | 1 Lambda + ECR + Function URL | ECS svc + TG + listener rule |

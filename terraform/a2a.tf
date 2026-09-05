@@ -24,7 +24,8 @@ locals {
 }
 
 # --------------------------------------------------------------------------
-# Task store - completed A2A tasks, TTL'd (supports tasks/get + tasks/resubscribe)
+# Task store - A2A tasks, TTL'd. Written "submitted" by the bridge, advanced to
+# working -> completed / failed by the worker (a2a-async.tf); read via tasks/get.
 # --------------------------------------------------------------------------
 resource "aws_dynamodb_table" "a2a_tasks" {
   count = local.a2a_enabled ? 1 : 0
@@ -85,19 +86,16 @@ resource "aws_iam_role_policy" "a2a_bridge" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "InvokeAgentRuntime"
-        Effect = "Allow"
-        Action = ["bedrock-agentcore:InvokeAgentRuntime"]
-        Resource = [
-          aws_bedrockagentcore_agent_runtime.compliance_agent.agent_runtime_arn,
-          "${aws_bedrockagentcore_agent_runtime.compliance_agent.agent_runtime_arn}/*",
-        ]
-      },
-      {
         Sid      = "TaskStore"
         Effect   = "Allow"
-        Action   = ["dynamodb:PutItem", "dynamodb:GetItem"]
+        Action   = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem"]
         Resource = aws_dynamodb_table.a2a_tasks[0].arn
+      },
+      {
+        Sid      = "EnqueueWork"
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = aws_sqs_queue.a2a_tasks[0].arn
       },
       {
         Effect   = "Allow"
@@ -116,24 +114,23 @@ resource "aws_lambda_function" "a2a_bridge" {
   role             = aws_iam_role.a2a_bridge[0].arn
   handler          = "handler.lambda_handler"
   runtime          = "python3.13"
-  timeout          = 120
+  timeout          = 29 # must stay under the API Gateway HTTP API 30s integration cap
   memory_size      = 512
   filename         = data.archive_file.a2a_bridge[0].output_path
   source_code_hash = data.archive_file.a2a_bridge[0].output_base64sha256
 
   environment {
     variables = {
-      AGENT_RUNTIME_ARN       = aws_bedrockagentcore_agent_runtime.compliance_agent.agent_runtime_arn
-      AGENT_RUNTIME_QUALIFIER = "DEFAULT"
-      A2A_TASKS_TABLE         = aws_dynamodb_table.a2a_tasks[0].name
-      PUBLIC_BASE_URL         = local.a2a_base_url
-      AGENT_NAME              = var.agent_public_name
-      AGENT_VERSION           = "2026.2"
-      COGNITO_TOKEN_URL       = "${local.cognito_a2a_domain_base}/oauth2/token"
-      COGNITO_AUTHORIZE_URL   = "${local.cognito_a2a_domain_base}/oauth2/authorize"
-      COGNITO_SCOPE           = "${aws_cognito_resource_server.a2a[0].identifier}/invoke"
-      ENTRA_TENANT_ID         = var.entra_tenant_id
-      LOG_LEVEL               = var.log_level
+      A2A_TASKS_TABLE       = aws_dynamodb_table.a2a_tasks[0].name
+      A2A_QUEUE_URL         = aws_sqs_queue.a2a_tasks[0].id
+      PUBLIC_BASE_URL       = local.a2a_base_url
+      AGENT_NAME            = var.agent_public_name
+      AGENT_VERSION         = "2026.2"
+      COGNITO_TOKEN_URL     = "${local.cognito_a2a_domain_base}/oauth2/token"
+      COGNITO_AUTHORIZE_URL = "${local.cognito_a2a_domain_base}/oauth2/authorize"
+      COGNITO_SCOPE         = "${aws_cognito_resource_server.a2a[0].identifier}/invoke"
+      ENTRA_TENANT_ID       = var.entra_tenant_id
+      LOG_LEVEL             = var.log_level
     }
   }
 

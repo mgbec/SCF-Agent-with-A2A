@@ -43,3 +43,9 @@ entra_issuer_override = ""
 
 # Optional custom domain for the A2A API (only changes URLs in the Agent Card)
 a2a_custom_domain = ""
+
+# Async A2A worker: max seconds per agent turn, and the SQS event-source
+# concurrency cap (bounds concurrent Bedrock calls; minimum 2). message/send
+# returns immediately; the worker runs the turn out of band, client polls tasks/get.
+a2a_worker_timeout         = 600
+a2a_worker_max_concurrency = 5

@@ -106,6 +106,11 @@ output "a2a_generic_agent_card_url" {
   value       = local.a2a_enabled ? "${local.a2a_base_url}/.well-known/agent-card.json" : null
 }
 
+output "a2a_tasks_dlq_url" {
+  description = "Dead-letter queue for A2A task jobs the worker Lambda failed to process"
+  value       = local.a2a_enabled ? aws_sqs_queue.a2a_tasks_dlq[0].id : null
+}
+
 output "cognito_user_pool_id" {
   description = "Cognito user pool ID backing the A2A Cognito route"
   value       = local.a2a_enabled ? aws_cognito_user_pool.a2a[0].id : null
